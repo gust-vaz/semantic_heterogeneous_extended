@@ -7,9 +7,9 @@ fonttools==4.54.1
 kiwisolver==1.4.7
 matplotlib==3.9.2
 memory-profiler==0.61.0
-numpy==1.23.4
+numpy>1.23.4
 packaging==24.1
-pandas==1.5.1
+pandas>=2.0.0
 pickleshare==0.7.5
 pillow==10.4.0
 psutil==6.0.0
