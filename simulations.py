@@ -180,6 +180,6 @@ for i in range(number_of_tests):
         'operations_phase':tests_result['operations_phase']
     }
     print(d)
-    performance_results = performance_results.append(d, ignore_index=True)  
+    performance_results = pd.concat([performance_results, pd.DataFrame([d])], ignore_index=True)
 
 performance_results.to_csv(csv_destination)

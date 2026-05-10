@@ -1,4 +1,3 @@
-from distutils import version
 import random
 import uuid
 import pandas as pd

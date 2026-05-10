@@ -200,7 +200,10 @@ class Collection:
     def insert_many_by_dataframe(self, dataframe, ValidFromField):        
         all_versions = self.collection_versions.find(projection=['version_valid_from','version_number'])
         dates = pd.DataFrame(all_versions).sort_values(by='version_valid_from')
-        dates = dates.append([{'version_valid_from':datetime(2200,12,31), 'version_number':float('inf')}], ignore_index=True)
+        dates = pd.concat([
+            dates,
+            pd.DataFrame([{'version_valid_from': datetime(2200, 12, 31), 'version_number': float('inf')}])
+        ], ignore_index=True)
         dates= dates.reset_index(drop=True)
 
         dates_1= dates.copy().reindex(index=np.roll(dates.index,-1))
