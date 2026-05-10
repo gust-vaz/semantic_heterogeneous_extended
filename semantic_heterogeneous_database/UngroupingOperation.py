@@ -7,6 +7,9 @@ from argparse import ArgumentError
 from pymongo import MongoClient, ASCENDING, DESCENDING
 
 class UngroupingOperation:
+    def reapply_operation_forward(self, version_change):
+        # Splitting/ungrouping does not support forward reapplication
+        pass
     def __init__(self, Collection_):
         self.collection = Collection_.collection
         self.forward_processable = True

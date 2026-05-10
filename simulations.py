@@ -8,9 +8,10 @@ from pymongo import MongoClient
 from database_generator import DatabaseGenerator
 pd.options.mode.chained_assignment = None  # default='warn'
 
+random.seed(42)
 
-parser=argparse.ArgumentParser()
 
+parser = argparse.ArgumentParser()
 parser.add_argument("--records")
 parser.add_argument("--versions")
 parser.add_argument("--fields")
@@ -23,7 +24,7 @@ parser.add_argument("--evolution_fields")
 parser.add_argument("--operations")
 parser.add_argument("--mode")
 
-args=parser.parse_args()
+args = parser.parse_args()
 
 number_of_records = int(args.records)
 number_of_versions = int(args.versions)
@@ -163,21 +164,21 @@ def update_and_read_test(percent_of_update, insert_first_selected):
 
 for i in range(number_of_tests):
     print('Starting test ' + str(i))
-    tests_result = update_and_read_test(update_percent, method == 'insertion_first')    
+    tests_result = update_and_read_test(update_percent, method == 'insertion_first')
     d = {
-        'number_of_records':number_of_records,
-        'number_of_versions':number_of_versions,
-        'number_of_fields':number_of_fields,
-        'number_of_values_in_domain':number_of_values_in_domain,
-        'number_of_tests':number_of_tests,
-        'number_of_evolution_fields':number_of_evolution_fields,
-        'number_of_operations':number_of_operations,
-        'update_percent':update_percent,
-        'operation_mode':operation_mode,
-        'method':method,
+        'number_of_records': number_of_records,
+        'number_of_versions': number_of_versions,
+        'number_of_fields': number_of_fields,
+        'number_of_values_in_domain': number_of_values_in_domain,
+        'number_of_tests': number_of_tests,
+        'number_of_evolution_fields': number_of_evolution_fields,
+        'number_of_operations': number_of_operations,
+        'update_percent': update_percent,
+        'operation_mode': operation_mode,
+        'method': method,
         'insertion_phase': tests_result['insertion_phase'],
-        'operations_baseline' : tests_result['operations_baseline'],
-        'operations_phase':tests_result['operations_phase']
+        'operations_baseline': tests_result['operations_baseline'],
+        'operations_phase': tests_result['operations_phase']
     }
     print(d)
     performance_results = pd.concat([performance_results, pd.DataFrame([d])], ignore_index=True)

@@ -2,7 +2,6 @@ from semantic_heterogeneous_database import BasicCollection
 from datetime import datetime
 import random
 import string
-import json
 
 
 ### This class first randomically generates the documents to be inserted, and the semantic operations for the database
