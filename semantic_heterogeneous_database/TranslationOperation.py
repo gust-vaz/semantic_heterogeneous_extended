@@ -257,8 +257,8 @@ class TranslationOperation:
     def evolute_backward(self, Document, operation):
         if Document[operation['previous_operation.field'].values[0]] == operation['previous_operation.from'].values[0]:
             Document = Document.copy()
-            Document[operation['previous_opnext_versioneration.field'].values[0]] = operation['previous_operation.to'].values[0]
-            return Document                
+            Document[operation['previous_operation.field'].values[0]] = operation['previous_operation.to'].values[0]
+            return Document
         else:
             raise BaseException('Record should not be evoluted')
 

@@ -1,0 +1,29 @@
+services:
+  mongodb:
+    image: mongo:8.0
+    restart: no
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  runner:
+    build: ./docker/runner
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    environment:
+      MONGO_HOST: mongodb
+    volumes:
+      - .:/app
+    working_dir: /app
+    profiles:
+      - run
+
+volumes:
+  mongodb_data:

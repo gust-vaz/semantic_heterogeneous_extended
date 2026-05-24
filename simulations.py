@@ -1,4 +1,5 @@
 import argparse, sys
+import os
 import time
 import json
 import random
@@ -23,6 +24,7 @@ parser.add_argument("--destination")
 parser.add_argument("--evolution_fields")
 parser.add_argument("--operations")
 parser.add_argument("--mode")
+parser.add_argument("--host", default=None, help="MongoDB host (default: MONGO_HOST env var or localhost)")
 
 args = parser.parse_args()
 
@@ -43,11 +45,11 @@ print(f'Test Arguments:{str(args)}')
 if method != 'insertion_first' and method != 'operations_first':
     raise BaseException('Method not implemented')
 
-host = 'localhost'
+host = args.host or os.environ.get('MONGO_HOST', 'localhost')
 performance_results = pd.DataFrame()
 
-def insert_first():    
-    d = DatabaseGenerator()
+def insert_first():
+    d = DatabaseGenerator(host=host)
     d.generate(number_of_records=number_of_records, number_of_versions=1, number_of_fields=number_of_fields,number_of_values_in_domain=number_of_values_in_domain,number_of_evolution_fields=2, operation_mode=operation_mode)
     records = pd.DataFrame(d.records)
 
@@ -68,8 +70,8 @@ def insert_first():
     }
     return ret
 
-def operations_first():    
-    d = DatabaseGenerator()
+def operations_first():
+    d = DatabaseGenerator(host=host)
     print('Generating Records')
     d.generate(number_of_records=number_of_records, number_of_versions=1, number_of_fields=number_of_fields,number_of_values_in_domain=number_of_values_in_domain,number_of_evolution_fields=2, operation_mode=operation_mode)
     records = pd.DataFrame(d.records)
