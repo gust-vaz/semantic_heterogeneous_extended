@@ -76,8 +76,10 @@ docker compose run --rm runner bash simulations_batch.sh
 ### 4. Run the tests
 
 ```bash
-docker compose run --rm runner python tests.py
+docker compose run --rm runner python -m pytest -v
 ```
+
+Pass extra pytest flags after `-v` as needed — e.g. `-k translation` to run only translation tests, `--tb=short` for compact tracebacks.
 
 ### 5. Stop and clean up
 
@@ -142,7 +144,13 @@ Verify it is running:
 sudo systemctl status mongod
 ```
 
-### 5. Run a simulation
+### 5. Run the tests
+
+```bash
+uv run python -m pytest -v
+```
+
+### 6. Run a simulation
 
 ```bash
 uv run simulations.py \
@@ -159,7 +167,7 @@ uv run simulations.py \
     --destination="results.csv"
 ```
 
-### 6. Stop MongoDB when done
+### 7. Stop MongoDB when done
 
 ```bash
 sudo systemctl stop mongod
@@ -228,7 +236,13 @@ docker compose run --rm runner python simulations.py --help   # Docker
 │   ├── GroupingOperation.py           # Many-to-1 merge (forward only)
 │   ├── UngroupingOperation.py         # 1-to-many split (backward only)
 │   ├── SemanticOperation.py           # Abstract base class
-│   └── tests/                         # Unit tests
+│   └── tests/
+│       ├── conftest.py                # pytest fixtures (make_collection, count)
+│       ├── test_translation.py        # TranslationOperation tests
+│       ├── test_grouping.py           # GroupingOperation (merge) tests
+│       ├── test_ungrouping.py         # UngroupingOperation (split) tests
+│       ├── test_chained.py            # Chained and mixed operations
+│       └── test_edge_cases.py         # Edge cases, invalid inputs, mode consistency
 │
 ├── docker/
 │   └── runner/
@@ -254,9 +268,9 @@ docker compose run --rm runner python simulations.py --help   # Docker
 ├── simulations_realcases.py           # Benchmark using real DATASUS dataset
 ├── simulations_realcases_operations.py
 ├── simulations_writer.py              # Result file writer utility
-├── tests.py                           # Test runner
+├── tests.py                           # Thin pytest entry-point (python tests.py)
 ├── docker-compose.yml
-└── pyproject.toml                     # Dependencies (uv / pip)
+└── pyproject.toml                     # Dependencies and pytest configuration
 ```
 
 ---
@@ -274,19 +288,19 @@ col = BasicCollection('mydb', 'mycollection', host='localhost', operation_mode='
 col.insert_one('{"city": "Piçarras", "population": 50000}', datetime(2000, 1, 1))
 
 # Register a semantic evolution: "Piçarras" was renamed in 2004
-col.collection.execute_operation('translation', datetime(2004, 1, 1), {
+col.execute_operation('translation', datetime(2004, 1, 1), {
     'fieldName': 'city',
     'oldValue': 'Piçarras',
     'newValue': 'Balneário Piçarras'
 })
 
 # Load many evolution operations from a CSV file
-col.collection.execute_many_operations_by_csv('operations.csv', 'type', 'valid_from')
+col.execute_many_operations_by_csv('operations.csv', 'type', 'valid_from')
 
 # Query transparently — returns records from all periods under the current name
-results = col.collection.find_many({'city': 'Balneário Piçarras'})
-col.collection.pretty_print(results)
+results = col.find_many({'city': 'Balneário Piçarras'})
+col.pretty_print(results)
 
 # Create indexes for better query performance
-col.collection.create_index(['city'])
+col.create_index(['city'])
 ```

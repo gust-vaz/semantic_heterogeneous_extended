@@ -1,8 +1,4 @@
-# from .test_base import TestBase
-# from .test_translation import TranslationTest
-# from .test_grouping import GroupingTest
-# from .test_ungrouping import UngroupingTest
-# from .test_translation_sus import TranslationSusTest
-# from .test_grouping_sus import GroupingSusTest
-# from .test_ungrouping_sus import UngroupingSusTest
-from .test_translation_sus import SusTest
+# Test package for MellowDB.
+# The old unittest-based tests (test_translation_sus.py, etc.) required a
+# hard-coded external folder that is no longer available and are superseded
+# by the new pytest-based test suite in this directory.
