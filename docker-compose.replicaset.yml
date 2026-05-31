@@ -1,0 +1,90 @@
+services:
+  mongo-primary:
+    image: mongo:8.0
+    restart: no
+    command: mongod --replSet rs0 --bind_ip_all --port 27017
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-primary-data:/data/db
+    networks:
+      - mellow-rs-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  mongo-secondary-1:
+    image: mongo:8.0
+    restart: no
+    command: mongod --replSet rs0 --bind_ip_all --port 27018
+    ports:
+      - "27018:27018"
+    volumes:
+      - mongo-secondary-1-data:/data/db
+    networks:
+      - mellow-rs-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  mongo-secondary-2:
+    image: mongo:8.0
+    restart: no
+    command: mongod --replSet rs0 --bind_ip_all --port 27019
+    ports:
+      - "27019:27019"
+    volumes:
+      - mongo-secondary-2-data:/data/db
+    networks:
+      - mellow-rs-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--port", "27019", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  mongo-init:
+    image: mongo:8.0
+    restart: no
+    depends_on:
+      mongo-primary:
+        condition: service_healthy
+      mongo-secondary-1:
+        condition: service_healthy
+      mongo-secondary-2:
+        condition: service_healthy
+    command: >
+      mongosh --host mongo-primary:27017
+      /docker-entrypoint-initdb.d/init-replicaset.js
+    volumes:
+      - ./docker/replicaset/init-replicaset.js:/docker-entrypoint-initdb.d/init-replicaset.js:ro
+    networks:
+      - mellow-rs-net
+
+  runner:
+    build: ./docker/runner
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      MONGO_URI: "mongodb://mongo-primary:27017,mongo-secondary-1:27018,mongo-secondary-2:27019/?replicaSet=rs0"
+    volumes:
+      - .:/app
+    working_dir: /app
+    networks:
+      - mellow-rs-net
+    profiles:
+      - run
+
+networks:
+  mellow-rs-net:
+    driver: bridge
+
+volumes:
+  mongo-primary-data:
+  mongo-secondary-1-data:
+  mongo-secondary-2-data:
