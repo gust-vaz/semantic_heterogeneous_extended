@@ -89,7 +89,7 @@ class GroupingOperation:
             self.collection.db[temporary_collection].drop()
 
         new_version = {
-            "current_version": 1 if next_version is None else 0,
+            "current_version": 1 if next_version_count == 0 else 0,
             "version_valid_from": validFromDate,
             "previous_version": previous_version['version_number'],
             "previous_version_valid_from": previous_version['version_valid_from'],
