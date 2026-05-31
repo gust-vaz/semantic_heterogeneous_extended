@@ -16,6 +16,19 @@ Two strategies are implemented and benchmarked:
 
 ---
 
+## Deployment Modes
+
+MellowDB supports two MongoDB deployment modes:
+
+| Mode | Setup | When to use |
+|------|-------|-------------|
+| **Single node** | `docker-compose.yml` | Development, unit tests, paper reproduction |
+| **Replica set (3 nodes)** | `docker-compose.replicaset.yml` | Distributed experiments, availability testing |
+
+Both modes share the same Python API — changing `mongo_uri` is all that is required at the application level.
+
+---
+
 ## Getting Started
 
 ### Prerequisites
@@ -89,6 +102,74 @@ docker compose down
 
 # Stop and delete all data
 docker compose down -v
+```
+
+---
+
+## Option C — Docker Replica Set (distributed experiments)
+
+This setup runs a 3-node MongoDB Replica Set inside Docker, which is required for distributed benchmarks, transaction testing, and the distributed test suite.
+
+### 1. Start the replica set
+
+```bash
+docker compose -f docker-compose.replicaset.yml up -d \
+  mongo-primary mongo-secondary-1 mongo-secondary-2 mongo-init
+```
+
+This starts:
+- `mongo-primary` on port **27017** (priority 2 — preferred PRIMARY)
+- `mongo-secondary-1` on port **27018**
+- `mongo-secondary-2` on port **27019**
+- `mongo-init` — a one-shot container that runs `rs.initiate(...)` and waits for a PRIMARY to be elected, then exits
+
+Wait ~30 seconds for election, then verify:
+
+```bash
+mongosh --port 27017 --eval "rs.status().members.map(m => ({name: m.name, state: m.stateStr}))"
+```
+
+Expected output: one `PRIMARY`, two `SECONDARY`.
+
+### 2. Run a simulation against the replica set
+
+```bash
+uv run simulations.py \
+    --records=200000 --versions=5 --fields=20 --domain=40 \
+    --repetitions=30 --evolution_fields=2 --operations=50 \
+    --update_percent=0.05 --mode="preprocess" \
+    --method="operations_first" \
+    --mongo_uri="mongodb://localhost:27017/?directConnection=true" \
+    --write_concern="majority" \
+    --nodes=3 \
+    --destination="results_rs3_majority.csv"
+```
+
+The `--nodes` argument is metadata only — it is written to the output CSV so results from different topologies can be compared. The `--write_concern` argument accepts `1`, `majority`, or `all`.
+
+### 3. Run all tests (unit + distributed)
+
+```bash
+# Unit tests (work against any running MongoDB)
+uv run pytest semantic_heterogeneous_database/tests/ -v
+
+# Distributed tests — require the replica set to be running on localhost:27017-27019
+uv run pytest tests/distributed/ -m "not slow" -v
+
+# Slow distributed tests: failover and consistency rate measurement
+uv run pytest tests/distributed/ -m slow -v --timeout=180
+```
+
+See the [Running Tests](#running-tests) section for full details.
+
+### 4. Stop the replica set
+
+```bash
+# Stop containers (data volumes are preserved)
+docker compose -f docker-compose.replicaset.yml down
+
+# Stop and delete all data
+docker compose -f docker-compose.replicaset.yml down -v
 ```
 
 ---
@@ -175,6 +256,58 @@ sudo systemctl stop mongod
 
 ---
 
+## Running Tests
+
+MellowDB has two test suites. Unit tests require only a running MongoDB instance (single node or replica set). Distributed tests additionally require a 3-node replica set.
+
+### Unit tests
+
+```bash
+# Against single-node MongoDB (docker-compose.yml up, or local mongod)
+uv run pytest semantic_heterogeneous_database/tests/ -v
+
+# Against the replica set (docker-compose.replicaset.yml up)
+uv run pytest semantic_heterogeneous_database/tests/ -v
+# No change needed — the conftest detects topology automatically
+```
+
+### Distributed tests
+
+Start the replica set first (Option C above), then:
+
+```bash
+# Fast distributed tests: semantic correctness and concurrent operation safety
+# Auto-skipped if no replica set is reachable
+uv run pytest tests/distributed/ -m "not slow" -v
+```
+
+```bash
+# Slow distributed tests: primary failover (~30-60s each) and consistency rate measurement
+uv run pytest tests/distributed/ -m slow -v --timeout=180
+```
+
+```bash
+# Consistency rate test with CSV output
+uv run pytest tests/distributed/test_semantic_consistency_rate.py \
+  -m slow -v --output=results_consistency.csv
+```
+
+```bash
+# Run everything (unit + distributed fast)
+uv run pytest semantic_heterogeneous_database/tests/ tests/distributed/ -m "not slow" -v
+```
+
+### What the distributed test suite covers
+
+| File | Marks | What it tests |
+|------|-------|---------------|
+| `test_distributed_correctness.py` | (none) | Semantic correctness of translation, grouping, rewrite mode on a replica set; verifies `_versions_r` routes to PRIMARY with majority concern |
+| `test_concurrent_operations.py` | (none) | Concurrent `execute_operation` calls leave the version chain consistent — no duplicate version numbers, no broken pointers |
+| `test_failover.py` | `slow` | Primary failure and election: data written before failover survives; new operations work after election |
+| `test_semantic_consistency_rate.py` | `slow` | Quantifies semantic correctness (F1 score) under four combinations of write concern and version read concern; asserts majority reads always yield 100% F1 |
+
+---
+
 ## Simulation Arguments
 
 | Argument | Type | Description |
@@ -191,6 +324,9 @@ sudo systemctl stop mongod
 | `--repetitions` | int | Number of times to repeat the test |
 | `--destination` | string | Output CSV file path |
 | `--host` | string | MongoDB host (overrides `MONGO_HOST` env var; default: `localhost`) |
+| `--mongo_uri` | string | Full MongoDB URI — use for replica sets, e.g. `mongodb://localhost:27017/?directConnection=true` |
+| `--write_concern` | string | Write concern: `1`, `majority` (default), or `all` |
+| `--nodes` | int | Number of RS nodes — written to CSV as metadata for experiment comparison |
 
 ### Initialization strategies
 
@@ -202,19 +338,28 @@ sudo systemctl stop mongod
 ### Example commands
 
 ```bash
-# Read-heavy workload, preprocessing strategy, operations-first init
+# Single-node: read-heavy workload, preprocessing strategy
 uv run simulations.py \
     --records=200000 --versions=5 --fields=20 --domain=40 \
     --repetitions=3 --evolution_fields=2 --operations=500 \
     --update_percent=0 --mode="preprocess" --method="operations_first" \
     --destination="results_preprocess_read_only.csv"
 
-# Write-heavy workload, query rewriting strategy
+# Single-node: write-heavy workload, query rewriting strategy
 uv run simulations.py \
     --records=200000 --versions=5 --fields=20 --domain=40 \
     --repetitions=3 --evolution_fields=2 --operations=500 \
     --update_percent=0.95 --mode="rewrite" --method="operations_first" \
     --destination="results_rewrite_write_heavy.csv"
+
+# Replica set: 3-node RS, majority write concern, preprocessing strategy
+uv run simulations.py \
+    --records=200000 --versions=5 --fields=20 --domain=40 \
+    --repetitions=30 --evolution_fields=2 --operations=500 \
+    --update_percent=0.05 --mode="preprocess" --method="operations_first" \
+    --mongo_uri="mongodb://localhost:27017/?directConnection=true" \
+    --write_concern="majority" --nodes=3 \
+    --destination="results_rs3_preprocess.csv"
 ```
 
 For all options:
@@ -230,24 +375,35 @@ docker compose run --rm runner python simulations.py --help   # Docker
 
 ```
 ├── semantic_heterogeneous_database/   # MellowDB Python package
-│   ├── BasicCollection.py             # Public API (PyMongo-compatible)
-│   ├── Collection.py                  # Core engine: insert, find, query rewriting
-│   ├── TranslationOperation.py        # 1-to-1 rename (reversible)
-│   ├── GroupingOperation.py           # Many-to-1 merge (forward only)
-│   ├── UngroupingOperation.py         # 1-to-many split (backward only)
+│   ├── BasicCollection.py             # Public API; accepts mongo_uri + write_concern
+│   ├── Collection.py                  # Core engine: insert, find, query rewriting,
+│   │                                  #   write concern, _versions_r, _is_replica_set
+│   ├── TranslationOperation.py        # 1-to-1 rename; transaction-protected chain writes
+│   ├── GroupingOperation.py           # Many-to-1 merge; transaction-protected chain writes
+│   ├── UngroupingOperation.py         # 1-to-many split; transaction-protected chain writes
 │   ├── SemanticOperation.py           # Abstract base class
-│   └── tests/
+│   └── tests/                         # Unit tests (work on any MongoDB topology)
 │       ├── conftest.py                # pytest fixtures (make_collection, count)
-│       ├── test_translation.py        # TranslationOperation tests
-│       ├── test_grouping.py           # GroupingOperation (merge) tests
-│       ├── test_ungrouping.py         # UngroupingOperation (split) tests
-│       ├── test_chained.py            # Chained and mixed operations
-│       └── test_edge_cases.py         # Edge cases, invalid inputs, mode consistency
+│       ├── test_translation.py
+│       ├── test_grouping.py
+│       ├── test_ungrouping.py
+│       ├── test_chained.py
+│       └── test_edge_cases.py
+│
+├── tests/
+│   └── distributed/                   # Distributed tests (require replica set)
+│       ├── conftest.py                # RS fixtures: make_rs_collection, assert_chain_integrity
+│       ├── test_distributed_correctness.py   # Semantic correctness on RS
+│       ├── test_concurrent_operations.py     # Version chain safety under concurrent ops
+│       ├── test_failover.py                  # Primary failover recovery (slow)
+│       └── test_semantic_consistency_rate.py # F1 score vs. consistency level (slow)
 │
 ├── docker/
-│   └── runner/
-│       ├── Dockerfile                 # Python 3.12-slim runner image
-│       └── requirements.txt           # Pinned Python dependencies
+│   ├── runner/
+│   │   ├── Dockerfile                 # Python 3.12-slim runner image
+│   │   └── requirements.txt
+│   └── replicaset/
+│       └── init-replicaset.js         # rs.initiate() script for the RS init container
 │
 ├── analysis/
 │   ├── datasus/processamento.r        # R script — generates paper figures (real dataset)
@@ -255,21 +411,23 @@ docker compose run --rm runner python simulations.py --help   # Docker
 │
 ├── dataset/
 │   └── MellowDB - experiments/        # Raw result files from paper experiments
-│       ├── first experiment/          # Preprocess vs. rewrite, no indexes
-│       ├── indexes experiment/        # With and without MongoDB indexes
-│       └── initialization experiment/ # operations_first vs. insertion_first
+│       ├── first experiment/
+│       ├── indexes experiment/
+│       └── initialization experiment/
 │
 ├── docs/
-│   └── artigo_fgcs_2025_semantic_evolution_dbs.pdf
+│   ├── artigo_fgcs_2025_semantic_evolution_dbs.pdf
+│   └── distributed-implementation-notes.md  # Detailed notes on the distributed extension
 │
 ├── database_generator.py              # Synthetic data and operation generator
-├── simulations.py                     # Main benchmark CLI
-├── simulations_batch.sh               # Full benchmark battery (paper experiments)
+├── simulations.py                     # Benchmark CLI (now includes --mongo_uri, --write_concern, --nodes)
+├── simulations_batch.sh               # Full benchmark battery
 ├── simulations_realcases.py           # Benchmark using real DATASUS dataset
 ├── simulations_realcases_operations.py
 ├── simulations_writer.py              # Result file writer utility
-├── tests.py                           # Thin pytest entry-point (python tests.py)
-├── docker-compose.yml
+├── tests.py                           # Thin pytest entry-point
+├── docker-compose.yml                 # Single-node MongoDB setup
+├── docker-compose.replicaset.yml      # 3-node replica set setup
 └── pyproject.toml                     # Dependencies and pytest configuration
 ```
 
@@ -281,8 +439,16 @@ docker compose run --rm runner python simulations.py --help   # Docker
 from semantic_heterogeneous_database import BasicCollection
 from datetime import datetime
 
-# Choose 'preprocess' (eager) or 'rewrite' (lazy)
-col = BasicCollection('mydb', 'mycollection', host='localhost', operation_mode='preprocess')
+# Single-node (default)
+col = BasicCollection('mydb', 'mycollection', operation_mode='preprocess')
+
+# Replica set
+col = BasicCollection(
+    'mydb', 'mycollection',
+    mongo_uri='mongodb://localhost:27017/?directConnection=true',
+    operation_mode='preprocess',
+    write_concern='majority'
+)
 
 # Insert records with their validity date
 col.insert_one('{"city": "Piçarras", "population": 50000}', datetime(2000, 1, 1))
