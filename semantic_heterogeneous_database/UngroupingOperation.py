@@ -118,8 +118,11 @@ class UngroupingOperation:
             new_version['next_operation'] = previous_version['next_operation']
 
         def _write_version_chain(session=None):
-            self.collection._col_versions_w.update_one(
-                {'version_number': previous_version['version_number']},
+            filter_ = {'version_number': previous_version['version_number']}
+            if next_version_count == 0:
+                filter_['next_version'] = None  # only match if still the terminal node
+            result = self.collection._col_versions_w.update_one(
+                filter_,
                 {'$set': {
                     'next_operation': next_operation,
                     'next_version': new_version_number,
@@ -128,6 +131,10 @@ class UngroupingOperation:
                 }},
                 session=session
             )
+            if next_version_count == 0 and result.modified_count == 0:
+                raise RuntimeError(
+                    "Version chain conflict: another operation already appended to this position. Retry required."
+                )
             if next_version is not None and 'version_valid_from' in next_version:
                 self.collection._col_versions_w.update_one(
                     {'version_number': next_version['version_number']},
