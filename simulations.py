@@ -62,7 +62,7 @@ if method != 'insertion_first' and method != 'operations_first':
     raise BaseException('Method not implemented')
 
 _raw_host = args.host or os.environ.get('MONGO_HOST', 'localhost')
-mongo_uri = args.mongo_uri or f"mongodb://{_raw_host}:27017"
+mongo_uri = args.mongo_uri or f"mongodb://{_raw_host}:27017/?directConnection=true"
 write_concern = args.write_concern
 nodes = args.nodes
 performance_results = pd.DataFrame()
