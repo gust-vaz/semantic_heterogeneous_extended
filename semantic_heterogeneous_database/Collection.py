@@ -3,6 +3,9 @@ import uuid
 import pandas as pd
 import numpy as np
 from pymongo import MongoClient, ASCENDING,DESCENDING
+from pymongo.write_concern import WriteConcern
+from pymongo.read_concern import ReadConcern
+from pymongo import ReadPreference
 from bson.objectid import ObjectId
 from datetime import datetime
 import json
@@ -10,7 +13,10 @@ import csv
 import re
 
 class Collection:
-    def __init__ (self,DatabaseName, CollectionName, Host='localhost', operation_mode='preprocess'):       
+    def __init__(self, DatabaseName, CollectionName,
+             mongo_uri='mongodb://localhost:27017',
+             operation_mode='preprocess',
+             write_concern='majority'):
 
         if not isinstance(operation_mode, str) or operation_mode not in ['preprocess','rewrite']:
             raise BaseException('Operation Mode not recognized')
@@ -19,7 +25,12 @@ class Collection:
         self.operations = {}
         self.logic_operators = ['$or','$and','$xor','$not','$nor']    
 
-        self.client = MongoClient(Host)        
+        self.client = MongoClient(mongo_uri)
+        self._write_concern = WriteConcern(w=write_concern)
+        self._is_replica_set = bool(
+            self.client.admin.command('hello').get('setName')
+        )
+
         self.database_name = DatabaseName
         self.db = self.client[DatabaseName]
 
@@ -49,7 +60,7 @@ class Collection:
             ## Loading semantic operations in memory       
             self.update_versions()
         
-        self.current_version = self.collection_versions.find_one({"current_version":1})
+        self.current_version = self._versions_r.find_one({"current_version":1})
         self.semantic_operations = {}
         
         #initializing first version
@@ -65,7 +76,9 @@ class Collection:
                 "next_version":None,
                 "next_operation":None
             }
-            self.collection_versions.insert_one(first_version)  
+            self.collection_versions.with_options(
+                write_concern=WriteConcern(w='majority')
+            ).insert_one(first_version)
             self.update_versions()                     
         else:
             self.current_version = self.current_version['version_number']
@@ -82,8 +95,40 @@ class Collection:
             self.collection.create_index([(field,1) for field in fields])
 
     def update_versions(self):
-        normalized = pd.json_normalize(self.collection_versions.find())
+        normalized = pd.json_normalize(self._versions_r.find())
         self.versions_df = pd.DataFrame(normalized)
+
+    @property
+    def _col_w(self):
+        """Raw collection with user-configured write concern."""
+        return self.collection.with_options(write_concern=self._write_concern)
+
+    @property
+    def _col_processed_w(self):
+        """Processed collection with user-configured write concern."""
+        return self.collection_processed.with_options(write_concern=self._write_concern)
+
+    @property
+    def _col_columns_w(self):
+        """Columns metadata collection with user-configured write concern."""
+        return self.collection_columns.with_options(write_concern=self._write_concern)
+
+    @property
+    def _col_versions_w(self):
+        """Versions collection with majority write concern. Used by operation classes for version chain writes."""
+        return self.collection_versions.with_options(
+            write_concern=WriteConcern(w='majority')
+        )
+
+    @property
+    def _versions_r(self):
+        """Versions collection read from PRIMARY with majority concern on replica sets; default on standalone."""
+        if self._is_replica_set:
+            return self.collection_versions.with_options(
+                read_preference=ReadPreference.PRIMARY,
+                read_concern=ReadConcern('majority')
+            )
+        return self.collection_versions
 
     def register_operation(self, OperationKey, SemanticOperationClass):
         self.semantic_operations[OperationKey] = SemanticOperationClass
@@ -99,7 +144,7 @@ class Collection:
         """               
         self.update_versions()
 
-        versions = self.collection_versions.find({'version_valid_from':{'$lte' : ValidFromDate}}).sort('version_valid_from',DESCENDING)
+        versions = self._versions_r.find({'version_valid_from':{'$lte' : ValidFromDate}}).sort('version_valid_from',DESCENDING)
         version = next(versions, None)                       
         
         self.__insert_one_by_version(JsonString, version['version_number'], ValidFromDate)                
@@ -114,7 +159,7 @@ class Collection:
             if isinstance(value, str) and re.match(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', value):
                 o[key] = datetime.fromisoformat(value)                                    
 
-        insertedDocument = self.collection.insert_one(o)        
+        insertedDocument = self._col_w.insert_one(o)
 
         if self.operation_mode != 'preprocess':
             return
@@ -168,18 +213,18 @@ class Collection:
             insertion_list.append(document)  ## If affected versions, document limits already updated when arrived here    
         
 
-        self.collection_processed.insert_many(insertion_list)
+        self._col_processed_w.insert_many(insertion_list)
 
         new_fields = list()
         for field in o:
-            if not field.startswith('_'):                
+            if not field.startswith('_'):
                 if field not in self.fields:
-                    new_field = {'field_name': field, 'first_edit_version': minVersion, 'last_edit_version': maxVersion}                
+                    new_field = {'field_name': field, 'first_edit_version': minVersion, 'last_edit_version': maxVersion}
                     new_fields.append(new_field)
                     self.fields[field] = (minVersion, maxVersion)
 
         if len(new_fields) > 0:
-            self.collection_columns.insert_many(new_fields)
+            self._col_columns_w.insert_many(new_fields)
         
 
     def insert_many_by_csv(self, FilePath, ValidFromField, ValidFromDateFormat='%Y-%m-%d', Delimiter=','):
@@ -198,7 +243,7 @@ class Collection:
         self.insert_many_by_dataframe(df, ValidFromField)
     
     def insert_many_by_dataframe(self, dataframe, ValidFromField):        
-        all_versions = self.collection_versions.find(projection=['version_valid_from','version_number'])
+        all_versions = self._versions_r.find(projection=['version_valid_from','version_number'])
         dates = pd.DataFrame(all_versions).sort_values(by='version_valid_from')
         dates = pd.concat([
             dates,
@@ -235,7 +280,7 @@ class Collection:
         processed_group = Group.copy()              
         
 
-        insertedDocuments = self.collection.insert_many(Group.to_dict('records'))         
+        insertedDocuments = self._col_w.insert_many(Group.to_dict('records'))
 
         if self.operation_mode != 'preprocess':
             return     
@@ -306,7 +351,7 @@ class Collection:
                         
             
             if len(g) > 0: # O que ta no g nao foi tocado por nenhuma alteração semantica e já pode ser inserido direto
-                self.collection_processed.insert_many(g.to_dict('records'))
+                self._col_processed_w.insert_many(g.to_dict('records'))
         
     
     def __process_query(self,QueryString):
@@ -399,11 +444,11 @@ class Collection:
                     
                     q = {'next_operation.field':field,'next_operation.from':fieldValueQ}
                 
-                versions = self.collection_versions.count_documents(q)
+                versions = self._versions_r.count_documents(q)
 
-                
-                if(versions > 0): ##Existe alguma coisa a ser processada sobre este campo ainda                    
-                    versions = self.collection_versions.find(q).sort('version_number')
+
+                if(versions > 0): ##Existe alguma coisa a ser processada sobre este campo ainda
+                    versions = self._versions_r.find(q).sort('version_number')
                     ## Not all the changes in this field might match the queried values. Therefore, we cannot only use all "previous start date"
                     ## for any file in the field
                     
@@ -440,7 +485,7 @@ class Collection:
                                 next_fieldValue_processed = json.loads(next_fieldValue_processed)
 
                             ##We need to check the next version after this to determine if the start of the version is the end of the previous version                        
-                            next_next_version = self.collection_versions.find_one({'version_number':version['next_version']})
+                            next_next_version = self._versions_r.find_one({'version_number':version['next_version']})
                             if next_next_version.get('next_operation',None) != None and next_next_version['next_operation']['from'] == next_fieldValue_processed:
                                 version_end = next_next_version['next_version_valid_from']
 
@@ -531,11 +576,11 @@ class Collection:
 
                 
                 ## Now looking for the next nodes
-                versions = self.collection_versions.count_documents(q)               
-                
-                if(versions > 0): ##Existe alguma coisa a ser processada sobre este campo ainda                    
+                versions = self._versions_r.count_documents(q)
 
-                    versions = self.collection_versions.find(q).sort('version_number', DESCENDING)
+                if(versions > 0): ##Existe alguma coisa a ser processada sobre este campo ainda
+
+                    versions = self._versions_r.find(q).sort('version_number', DESCENDING)
                     for version in versions:
                         operation_type = version['previous_operation']['type']
                         
@@ -773,35 +818,35 @@ class Collection:
                     fieldValueQ = fieldValue
                     q = {'next_operation.field':field,'next_operation.from':fieldValueQ}
                 
-                versions = self.collection_versions.count_documents(q)
+                versions = self._versions_r.count_documents(q)
 
                 version_number = None
                 version_id=None
                 if(versions > 0):
-                    versions = self.collection_versions.find(q).sort('version_number')
+                    versions = self._versions_r.find(q).sort('version_number')
                     for version in versions:
                         operation_type = version['next_operation']['type']
-                        
+
                         if not self.semantic_operations[operation_type].forward_processable:
                             continue
 
                         fieldValue = version['next_operation']['to']
                         version_number = version['version_number']
-                        version_id = version['_id']                        
+                        version_id = version['_id']
 
                         if isinstance(fieldValue, list):
                             for f in fieldValue:
                                 to_process.append((f, version_number, version_id))
                         else:
-                            to_process.append((fieldValue,version_number, version_id)) #besides from the original query, this value could also represent a record that were translated in the past from the original query term. Therefore, it must be considered in the query                        
-                
-                if version_number == None:                    
-                    queryTerms[field].append(fieldValue) 
+                            to_process.append((fieldValue,version_number, version_id)) #besides from the original query, this value could also represent a record that were translated in the past from the original query term. Therefore, it must be considered in the query
+
+                if version_number == None:
+                    queryTerms[field].append(fieldValue)
                 else:
                     if isinstance(fieldValue, list):
-                        for f in fieldValue:                            
-                            queryTerms[field].append((f,version_number,version_id))     
-                    else:                        
+                        for f in fieldValue:
+                            queryTerms[field].append((f,version_number,version_id))
+                    else:
                         queryTerms[field].append((fieldValue,version_number, version_id))
 
                 
@@ -844,11 +889,11 @@ class Collection:
                     fieldValueQ = fieldValue
                     q = {'previous_operation.field':field,'previous_operation.from':fieldValueQ}
                 
-                versions = self.collection_versions.count_documents(q)
+                versions = self._versions_r.count_documents(q)
                 version_number = None
                 version_id=None
                 if(versions > 0):
-                    versions = self.collection_versions.find(q).sort('version_number', DESCENDING)
+                    versions = self._versions_r.find(q).sort('version_number', DESCENDING)
                     for version in versions:
                         operation_type = version['previous_operation']['type']
                         
@@ -996,7 +1041,7 @@ class Collection:
 
 
     def check_if_operation_affected_forward(self, fieldName, newValue, version_number):
-        versions = self.collection_versions.find({'$and': [{'next_operation.field' : fieldName},                                                                      
+        versions = self._versions_r.find({'$and': [{'next_operation.field' : fieldName},
                                                                       {'next_operation.from' : newValue}, #We are checking if the informed evolution here affected any pre-existing evolutions so as to reprocess them. Gonna do it in both directions
                                                                       {'next_version': {'$gt': version_number}}
                                                         ]}).sort('next_version_valid_from',ASCENDING)
@@ -1013,8 +1058,8 @@ class Collection:
             self.check_if_operation_affected_forward(version_change['next_operation']['field'], version_change['next_operation']['to'],version_change['next_version'])#Recheck if affected any other evolution
 
     def check_if_operation_affected_backward(self, fieldName, newValue,version_number):
-        versions = self.collection.collection_versions.find({'$and': [{'previous_operation.field' : fieldName},                                                    
-                                                    {'previous_operation.from' : newValue}, #We are checking if the informed evolution here affected any pre-existing evolutions so as to reprocess them. 
+        versions = self._versions_r.find({'$and': [{'previous_operation.field' : fieldName},
+                                                    {'previous_operation.from' : newValue}, #We are checking if the informed evolution here affected any pre-existing evolutions so as to reprocess them.
                                                     {'previous_version_number': {'$lt': version_number}}
                                                     ]}).sort('previous_version_valid_from',DESCENDING)
 

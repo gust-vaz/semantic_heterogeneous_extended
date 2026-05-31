@@ -9,20 +9,26 @@ from .UngroupingOperation import UngroupingOperation
 import os
 
 class BasicCollection:
-    def __init__ (self,DatabaseName, CollectionName, Host='localhost', operation_mode='preprocess'):        
+    def __init__(self, DatabaseName, CollectionName,
+                 mongo_uri='mongodb://localhost:27017',
+                 operation_mode='preprocess',
+                 write_concern='majority'):
         if not isinstance(operation_mode, str) or operation_mode not in ['preprocess','rewrite']:
             raise BaseException('Operation Mode not recognized')
 
         self.operation_mode = operation_mode
         self.database_name = DatabaseName
         self.collection_name = CollectionName
-        self.host = Host
+        self.mongo_uri = mongo_uri
+        self.write_concern = write_concern
 
         self.initialize_collection()
-        
+
 
     def initialize_collection(self):
-        self.collection = Collection(self.database_name,self.collection_name, self.host, self.operation_mode)
+        self.collection = Collection(self.database_name, self.collection_name,
+                                     self.mongo_uri, self.operation_mode,
+                                     self.write_concern)
 
         # Register operations with new names
         self.collection.register_operation('translation', TranslationOperation(self))
