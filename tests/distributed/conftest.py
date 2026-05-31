@@ -17,6 +17,14 @@ MONGO_RS_URI = os.environ.get(
 )
 
 
+def pytest_addoption(parser):
+    try:
+        parser.addoption("--output", action="store", default=None,
+                         help="Output CSV file for consistency rate results")
+    except ValueError:
+        pass  # Already added by another conftest
+
+
 def _mongo_is_replica_set(uri: str) -> bool:
     try:
         client = MongoClient(uri, serverSelectionTimeoutMS=3000)

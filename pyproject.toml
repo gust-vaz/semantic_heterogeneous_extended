@@ -41,3 +41,11 @@ packages = ["semantic_heterogeneous_database"]
 [tool.pytest.ini_options]
 # Default test path so `pytest` (with no args) finds the right directory.
 testpaths = ["semantic_heterogeneous_database/tests"]
+markers = [
+    "slow: marks tests as slow (experimental evaluation, not CI gates)",
+]
+
+[dependency-groups]
+dev = [
+    "docker>=7.1.0",
+]
