@@ -2,6 +2,7 @@ from semantic_heterogeneous_database import BasicCollection
 from datetime import datetime
 import random
 import string
+import uuid
 
 
 ### This class first randomically generates the documents to be inserted, and the semantic operations for the database
@@ -187,8 +188,8 @@ class DatabaseGenerator:
     def generate(self, number_of_records, number_of_versions, number_of_fields, number_of_values_in_domain, number_of_evolution_fields, operation_mode):
         ## Starting random database
         self.letters = string.ascii_lowercase
-        self.database_name = ''.join(random.choice(self.letters) for i in range(5))
-        self.collection_name = ''.join(random.choice(self.letters) for i in range(10))
+        self.database_name = 'benchdb_' + uuid.uuid4().hex[:12]
+        self.collection_name = 'col_' + uuid.uuid4().hex[:12]
 
         ##Generating fields present in the documents        
         self.fields = list()
