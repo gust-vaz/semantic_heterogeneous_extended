@@ -34,6 +34,24 @@ def test_translation_backward_cascade(make_collection):
     assert _processed_cities(col) == ['A', 'B', 'C']
 
 
+def test_translation_forward_cascade(make_collection):
+    """B->C@2010 registered first, then A->B@2000: a record carrying A must
+    evolve A -> B -> C across the chain."""
+    col = make_collection('preprocess')
+    col.insert_one('{"city": "A", "pop": 1}', datetime(1990, 1, 1))
+
+    col.execute_operation(
+        'translation', datetime(2010, 1, 1),
+        {'fieldName': 'city', 'oldValue': 'B', 'newValue': 'C'}
+    )
+    col.execute_operation(
+        'translation', datetime(2000, 1, 1),
+        {'fieldName': 'city', 'oldValue': 'A', 'newValue': 'B'}
+    )
+
+    assert _processed_cities(col) == ['A', 'B', 'C']
+
+
 def test_grouping_forward_cascade(make_collection):
     """[X,Y]->Z@2010 registered first, then W->X@2000: a record carrying W
     must evolve W -> X -> Z across the chain."""

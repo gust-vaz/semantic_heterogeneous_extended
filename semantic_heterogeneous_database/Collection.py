@@ -134,6 +134,54 @@ class Collection:
     def register_operation(self, OperationKey, SemanticOperationClass):
         self.semantic_operations[OperationKey] = SemanticOperationClass
 
+    def split_processed_records(self, FieldName, ValueFilter, SpanVersion, EvolvedValue, Direction, BoundaryVersion=None):
+        """ Split every processed record matching {FieldName: ValueFilter} whose version
+        range spans SpanVersion into two ranges at BoundaryVersion, evolving FieldName to
+        EvolvedValue on the new half. This is the core materialization step shared by all
+        semantic operations and their reapplications.
+
+        Args:
+            FieldName(): field affected by the semantic operation
+            ValueFilter(): value (or pymongo filter like {'$in': [...]}) the records carry
+            SpanVersion(): version number the record range must span ( _min <= SpanVersion < _max )
+            EvolvedValue(): value FieldName receives on the evolved half
+            Direction(): 'forward' = evolved half is [BoundaryVersion, _max); 'backward' = evolved half is [_min, BoundaryVersion)
+            BoundaryVersion(): version number where the split happens; defaults to SpanVersion
+
+        """
+        if BoundaryVersion is None:
+            BoundaryVersion = SpanVersion
+
+        match = {'$and': [
+            {'_min_version_number': {'$lte': SpanVersion}},
+            {'_max_version_number': {'$gt': SpanVersion}},
+            {FieldName: ValueFilter}
+        ]}
+
+        if Direction == 'forward':
+            original_set = {'_max_version_number': BoundaryVersion}
+            evolved_set = {'_min_version_number': BoundaryVersion, FieldName: EvolvedValue}
+        else:
+            original_set = {'_min_version_number': BoundaryVersion}
+            evolved_set = {'_max_version_number': BoundaryVersion, FieldName: EvolvedValue}
+
+        ## Copy the affected records to a temporary collection, bound the originals at the
+        ## boundary, evolve the copies, and merge them back ($out cannot target the processed
+        ## collection directly, and $merge with whenMatched=fail keeps this insert-only).
+        temporary_collection = str(uuid.uuid4())
+        self.collection_processed.aggregate([
+            {'$match': match},
+            {'$unset': '_id'},
+            {'$out': temporary_collection}
+        ])
+        self.collection_processed.update_many(match, {'$set': original_set})
+        self.db[temporary_collection].update_many({}, {'$set': evolved_set})
+        self.db[temporary_collection].aggregate([
+            {'$match': {}},
+            {'$merge': {'into': self.collection_processed.name, 'whenMatched': 'fail'}}
+        ])
+        self.db[temporary_collection].drop()
+
 
     def insert_one(self, JsonString, ValidFromDate:datetime):
         """ Insert one documet in the collection.
