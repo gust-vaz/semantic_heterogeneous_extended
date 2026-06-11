@@ -8,6 +8,7 @@ from pymongo.read_concern import ReadConcern
 from pymongo import ReadPreference
 from bson.objectid import ObjectId
 from datetime import datetime
+from .exceptions import MellowDBError
 import json
 import csv
 import re
@@ -19,7 +20,7 @@ class Collection:
              write_concern='majority'):
 
         if not isinstance(operation_mode, str) or operation_mode not in ['preprocess','rewrite']:
-            raise BaseException('Operation Mode not recognized')
+            raise MellowDBError('Operation Mode not recognized')
         
         self.operation_mode = operation_mode        
         self.operations = {}
@@ -37,10 +38,10 @@ class Collection:
         existing_collections = self.db.list_collection_names()
         if operation_mode == 'rewrite':
             if (CollectionName + '_processed') in existing_collections:
-                raise BaseException('Previous preprocessed collection already exists.')            
+                raise MellowDBError('Previous preprocessed collection already exists.')            
         else:
             if (CollectionName + '_processed') not in existing_collections and CollectionName in existing_collections:
-                raise BaseException('Previous rewrite collection already exists.')            
+                raise MellowDBError('Previous rewrite collection already exists.')            
 
 
         self.collection = self.db[CollectionName]
@@ -298,7 +299,7 @@ class Collection:
 
         while len(recheck_group) > 0:
             if i == 300:
-                raise BaseException(f'Semantic processing did not converge after 300 iterations; {len(recheck_group)} rows still pending')
+                raise MellowDBError(f'Semantic processing did not converge after 300 iterations; {len(recheck_group)} rows still pending')
 
             i+=1
             

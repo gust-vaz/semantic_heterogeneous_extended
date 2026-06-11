@@ -1,5 +1,6 @@
 import shutil
 from .Collection import Collection
+from .exceptions import MellowDBError
 from .GroupingOperation import GroupingOperation
 from .TranslationOperation import TranslationOperation
 from datetime import datetime
@@ -13,7 +14,7 @@ class BasicCollection:
                  operation_mode='preprocess',
                  write_concern='majority'):
         if not isinstance(operation_mode, str) or operation_mode not in ['preprocess','rewrite']:
-            raise BaseException('Operation Mode not recognized')
+            raise MellowDBError('Operation Mode not recognized')
 
         self.operation_mode = operation_mode
         self.database_name = DatabaseName

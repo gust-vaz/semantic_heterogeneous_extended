@@ -1,5 +1,5 @@
 import datetime
-from argparse import ArgumentError
+from .exceptions import MellowDBError, InvalidOperationArguments, VersionChainConflict
 import pandas as pd
 import random
 import uuid
@@ -19,11 +19,11 @@ class TranslationOperation:
 
     def execute_operation(self, validFromDate: datetime, args: dict):
         if 'oldValue' not in args:
-            raise ArgumentError("oldValue", "Missing 'oldValue' parameter for translation")
+            raise InvalidOperationArguments("Missing 'oldValue' parameter for translation")
         if 'newValue' not in args:
-            raise ArgumentError("newValue", "Missing 'newValue' parameter for translation")
+            raise InvalidOperationArguments("Missing 'newValue' parameter for translation")
         if 'fieldName' not in args:
-            raise ArgumentError("fieldName", "Missing 'fieldName' parameter for translation")
+            raise InvalidOperationArguments("Missing 'fieldName' parameter for translation")
 
         oldValue = args['oldValue']
         newValue = args['newValue']
@@ -161,7 +161,7 @@ class TranslationOperation:
                 session=session
             )
             if next_version_count == 0 and result.modified_count == 0:
-                raise RuntimeError(
+                raise VersionChainConflict(
                     "Version chain conflict: another operation already appended to this position. Retry required."
                 )
             if 'version_valid_from' in next_version:
@@ -276,7 +276,7 @@ class TranslationOperation:
             Document[operation['next_operation.field'].values[0]] = operation['next_operation.to'].values[0]
             return Document
         else:
-            raise BaseException('Record should not be evoluted')        
+            raise MellowDBError('Record should not be evoluted')        
         
 
     def evolute_backward(self, Document, operation):
@@ -285,7 +285,7 @@ class TranslationOperation:
             Document[operation['previous_operation.field'].values[0]] = operation['previous_operation.to'].values[0]
             return Document
         else:
-            raise BaseException('Record should not be evoluted')
+            raise MellowDBError('Record should not be evoluted')
 
 
     def evolute_many_forward(self, field, DocumentOperationDataFrame):

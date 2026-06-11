@@ -2,7 +2,7 @@ import random
 import uuid
 import pandas as pd
 import datetime
-from argparse import ArgumentError
+from .exceptions import MellowDBError, InvalidOperationArguments, VersionChainConflict
 from pymongo.write_concern import WriteConcern
 from pymongo.read_concern import ReadConcern
 
@@ -20,13 +20,13 @@ class UngroupingOperation:
 
     def execute_operation(self, validFromDate: datetime, args: dict):
         if 'oldValue' not in args:
-            raise ArgumentError("oldValue", "Missing 'oldValue' parameter for splitting")
+            raise InvalidOperationArguments("Missing 'oldValue' parameter for splitting")
         if 'newValues' not in args:
-            raise ArgumentError("newValues", "Missing 'newValues' parameter for splitting")
+            raise InvalidOperationArguments("Missing 'newValues' parameter for splitting")
         if not isinstance(args['newValues'], list):
-            raise ArgumentError('newValues', 'NewValues argument must be a list')
+            raise InvalidOperationArguments('NewValues argument must be a list')
         if 'fieldName' not in args:
-            raise ArgumentError("fieldName", "Missing 'fieldName' parameter for splitting")
+            raise InvalidOperationArguments("Missing 'fieldName' parameter for splitting")
 
         oldValue = args['oldValue']
         newValues = args['newValues']
@@ -133,7 +133,7 @@ class UngroupingOperation:
                 session=session
             )
             if next_version_count == 0 and result.modified_count == 0:
-                raise RuntimeError(
+                raise VersionChainConflict(
                     "Version chain conflict: another operation already appended to this position. Retry required."
                 )
             if 'version_valid_from' in next_version:
@@ -205,7 +205,7 @@ class UngroupingOperation:
             Document[operation['previous_operation.field'].values[0]] = operation['previous_operation.to'].values[0]
             return Document                
         else:
-            raise BaseException('Record should not be evoluted')
+            raise MellowDBError('Record should not be evoluted')
 
 
     def check_if_many_affected(self, DocumentsDataFrame):

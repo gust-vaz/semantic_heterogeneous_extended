@@ -2,7 +2,7 @@ import random
 import uuid
 import pandas as pd
 import datetime
-from argparse import ArgumentError
+from .exceptions import MellowDBError, InvalidOperationArguments, VersionChainConflict
 from pymongo.write_concern import WriteConcern
 from pymongo.read_concern import ReadConcern
 
@@ -20,13 +20,13 @@ class GroupingOperation:
 
     def execute_operation(self, validFromDate: datetime, args: dict):
         if 'oldValues' not in args:
-            raise ArgumentError("oldValues", "Missing 'oldValues' parameter for merging")
+            raise InvalidOperationArguments("Missing 'oldValues' parameter for merging")
         if not isinstance(args['oldValues'], list):
-            raise ArgumentError('oldValues', 'OldValues argument must be a list')
+            raise InvalidOperationArguments('OldValues argument must be a list')
         if 'newValue' not in args:
-            raise ArgumentError("newValue", "Missing 'newValue' parameter for merging")
+            raise InvalidOperationArguments("Missing 'newValue' parameter for merging")
         if 'fieldName' not in args:
-            raise ArgumentError("fieldName", "Missing 'fieldName' parameter for merging")
+            raise InvalidOperationArguments("Missing 'fieldName' parameter for merging")
 
         oldValues = args['oldValues']
         newValue = args['newValue']
@@ -133,7 +133,7 @@ class GroupingOperation:
                 session=session
             )
             if next_version_count == 0 and result.modified_count == 0:
-                raise RuntimeError(
+                raise VersionChainConflict(
                     "Version chain conflict: another operation already appended to this position. Retry required."
                 )
             if 'version_valid_from' in next_version:
@@ -202,7 +202,7 @@ class GroupingOperation:
             Document[operation['next_operation.field'].values[0]] = operation['next_operation.to'].values[0]            
             return Document
         else:
-            raise BaseException('Record should not be evoluted')
+            raise MellowDBError('Record should not be evoluted')
         
 
     def evolute_backward(self, Document, operation):        
