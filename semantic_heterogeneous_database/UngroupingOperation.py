@@ -9,13 +9,16 @@ from pymongo.write_concern import WriteConcern
 from pymongo.read_concern import ReadConcern
 
 class UngroupingOperation:
-    def reapply_operation_forward(self, version_change):
-        # Splitting/ungrouping does not support forward reapplication
-        pass
     def __init__(self, Collection_):
         self.collection = Collection_.collection
+        ## query expansion direction: a query for a pre-split value expands forward
+        ## to its fragments; expanding a fragment backward would over-match
         self.forward_processable = True
         self.backward_processable = False
+        ## record reprocessing direction: records evolve backward into the pre-split
+        ## value; forward is impossible (no way to pick a fragment for a record)
+        self.forward_reapplicable = False
+        self.backward_reapplicable = True
 
     def execute_operation(self, validFromDate: datetime, args: dict):
         if 'oldValue' not in args:
@@ -234,7 +237,41 @@ class UngroupingOperation:
 
         return return_obj      
 
-    def evolute_many_backward(self, field, DocumentOperationDataFrame):        
+    def evolute_many_backward(self, field, DocumentOperationDataFrame):
         d = DocumentOperationDataFrame.copy()
         d[field] = d['previous_operation.to']
-        return d    
+        return d
+
+    def reapply_operation_backward(self, version_change):
+        temporary_collection = str(uuid.uuid4())
+        #Copying all records affected by the splitting to a temporary collection
+        res = self.collection.collection_processed.aggregate([{ '$match': {'$and': [
+                                                                        {'_min_version_number' : {'$lte' : version_change['previous_version']}},
+                                                                        {'_max_version_number' : {'$gt' : version_change['previous_version']}},
+                                                                        {version_change['previous_operation']['field'] : {'$in' : version_change['previous_operation']['from']}}
+                                                                    ]
+                                                        }
+                                            },
+                                            {'$unset': '_id'},
+                                            { '$out' : temporary_collection } ])
+
+        ##part 1 of split - old registers are cut until last version before splitting
+        res = self.collection.collection_processed.update_many({'$and': [
+                                                                {'_min_version_number' : {'$lte' : version_change['previous_version']}},
+                                                                {'_max_version_number' : {'$gt' : version_change['previous_version']}},
+                                                                {version_change['previous_operation']['field'] : {'$in' : version_change['previous_operation']['from']}}
+                                                    ]
+                                                    },
+                                                    {'$set' : {'_min_version_number' : version_change['version_number']}}
+                                                )
+
+        ##part 2 of split - inserting registers starting from new version. Therefore, in the end of the process, records
+        #have been splitted in two parts.
+        res = self.collection.db[temporary_collection].update_many({},
+                                            {'$set' : {'_max_version_number' : version_change['version_number'], version_change['previous_operation']['field'] : version_change['previous_operation']['to']}}
+                                            )
+
+        res = self.collection.db[temporary_collection].aggregate([{'$match' : {}}, {'$merge': {'into' : self.collection.collection_processed.name, 'whenMatched' : 'fail'}}])
+        self.collection.db[temporary_collection].drop()
+
+        self.collection.check_if_operation_affected_backward(version_change['previous_operation']['field'], version_change['previous_operation']['to'],version_change['previous_version'])#Recheck if affected any other evolution
