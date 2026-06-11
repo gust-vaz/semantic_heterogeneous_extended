@@ -69,7 +69,7 @@ performance_results = pd.DataFrame()
 
 def insert_first():
     d = DatabaseGenerator(host=mongo_uri)
-    d.generate(number_of_records=number_of_records, number_of_versions=1, number_of_fields=number_of_fields,number_of_values_in_domain=number_of_values_in_domain,number_of_evolution_fields=2, operation_mode=operation_mode)
+    d.generate(number_of_records=number_of_records, number_of_versions=1, number_of_fields=number_of_fields,number_of_values_in_domain=number_of_values_in_domain,number_of_evolution_fields=number_of_evolution_fields, operation_mode=operation_mode)
     records = pd.DataFrame(d.records)
 
     start = time.time()
@@ -92,7 +92,7 @@ def insert_first():
 def operations_first():
     d = DatabaseGenerator(host=mongo_uri)
     print('Generating Records')
-    d.generate(number_of_records=number_of_records, number_of_versions=1, number_of_fields=number_of_fields,number_of_values_in_domain=number_of_values_in_domain,number_of_evolution_fields=2, operation_mode=operation_mode)
+    d.generate(number_of_records=number_of_records, number_of_versions=1, number_of_fields=number_of_fields,number_of_values_in_domain=number_of_values_in_domain,number_of_evolution_fields=number_of_evolution_fields, operation_mode=operation_mode)
     records = pd.DataFrame(d.records)
 
     start = time.time()    
