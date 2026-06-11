@@ -11,8 +11,12 @@ from pymongo.read_concern import ReadConcern
 class TranslationOperation:
     def __init__(self, Collection_):
         self.collection = Collection_.collection
+        ## query expansion direction
         self.forward_processable = True
         self.backward_processable = True
+        ## record reprocessing direction (reapply_operation_*)
+        self.forward_reapplicable = True
+        self.backward_reapplicable = True
 
     def execute_operation(self, validFromDate: datetime, args: dict):
         if 'oldValue' not in args:

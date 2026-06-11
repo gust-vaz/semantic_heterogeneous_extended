@@ -11,8 +11,14 @@ from pymongo.read_concern import ReadConcern
 class GroupingOperation:
     def __init__(self, Collection_):
         self.collection = Collection_.collection
+        ## query expansion direction: a query for a merged value expands backward
+        ## to its sources; expanding an old value forward would over-match
         self.forward_processable = False
         self.backward_processable = True
+        ## record reprocessing direction: records evolve forward into the merged
+        ## value; backward is impossible (no way to redistribute a merged record)
+        self.forward_reapplicable = True
+        self.backward_reapplicable = False
 
     def execute_operation(self, validFromDate: datetime, args: dict):
         if 'oldValues' not in args:
