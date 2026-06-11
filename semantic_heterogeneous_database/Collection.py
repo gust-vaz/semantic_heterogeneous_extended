@@ -1047,31 +1047,33 @@ class Collection:
                                                                       {'next_version': {'$gt': version_number}}
                                                         ]}).sort('next_version_valid_from',ASCENDING)
 
-        for version_change in versions:           
-            
+        for version_change in versions:
+
             # A previous evolution has been hit by this new evolution. We need to reprocess it.
             semantic_evolution = self.semantic_operations[version_change['next_operation']['type']]
 
-            if semantic_evolution.forward_processable:
-                semantic_evolution.reapply_operation_forward(version_change)            
+            ## forward_reapplicable gates record reprocessing; forward_processable gates query expansion and runs in the opposite direction for grouping/ungrouping
+            if semantic_evolution.forward_reapplicable:
+                semantic_evolution.reapply_operation_forward(version_change)
 
-            ##Recheck
-            self.check_if_operation_affected_forward(version_change['next_operation']['field'], version_change['next_operation']['to'],version_change['next_version'])#Recheck if affected any other evolution
+                ##Recheck
+                self.check_if_operation_affected_forward(version_change['next_operation']['field'], version_change['next_operation']['to'],version_change['next_version'])#Recheck if affected any other evolution
 
     def check_if_operation_affected_backward(self, fieldName, newValue,version_number):
         versions = self._versions_r.find({'$and': [{'previous_operation.field' : fieldName},
                                                     {'previous_operation.from' : newValue}, #We are checking if the informed evolution here affected any pre-existing evolutions so as to reprocess them.
-                                                    {'previous_version_number': {'$lt': version_number}}
+                                                    {'previous_version': {'$lt': version_number}}
                                                     ]}).sort('previous_version_valid_from',DESCENDING)
 
-        for version_change in versions:         
+        for version_change in versions:
 
             # A previous evolution has been hit by this new evolution. We need to reprocess it.
             semantic_evolution = self.semantic_operations[version_change['previous_operation']['type']]
-            if semantic_evolution.backward_processable:
+            ## backward_reapplicable gates record reprocessing; backward_processable gates query expansion and runs in the opposite direction for grouping/ungrouping
+            if semantic_evolution.backward_reapplicable:
                 semantic_evolution.reapply_operation_backward(version_change)
-            
-            self.check_if_operation_affected_backward(version_change['previous_operation']['field'], version_change['previous_operation']['to'],version_change['previous_version'])#Recheck if affected any other evolution
+
+                self.check_if_operation_affected_backward(version_change['previous_operation']['field'], version_change['previous_operation']['to'],version_change['previous_version'])#Recheck if affected any other evolution
     
 
 
