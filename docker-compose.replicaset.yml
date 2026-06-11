@@ -1,7 +1,7 @@
 services:
   mongo-primary:
-    image: mongo:8.0
-    restart: no
+    image: mongo:8.0.12
+    restart: unless-stopped
     command: mongod --replSet rs0 --bind_ip_all --port 27017
     ports:
       - "27017:27017"
@@ -16,8 +16,8 @@ services:
       retries: 15
 
   mongo-secondary-1:
-    image: mongo:8.0
-    restart: no
+    image: mongo:8.0.12
+    restart: unless-stopped
     command: mongod --replSet rs0 --bind_ip_all --port 27018
     ports:
       - "27018:27018"
@@ -32,8 +32,8 @@ services:
       retries: 15
 
   mongo-secondary-2:
-    image: mongo:8.0
-    restart: no
+    image: mongo:8.0.12
+    restart: unless-stopped
     command: mongod --replSet rs0 --bind_ip_all --port 27019
     ports:
       - "27019:27019"
@@ -48,7 +48,7 @@ services:
       retries: 15
 
   mongo-init:
-    image: mongo:8.0
+    image: mongo:8.0.12
     restart: no
     depends_on:
       mongo-primary:
