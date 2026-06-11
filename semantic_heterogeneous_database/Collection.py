@@ -263,10 +263,6 @@ class Collection:
         r = r.loc[(r['start']<= r[ValidFromField]) & (r['end'] > r[ValidFromField])]
         r.rename(columns={'start':'version_valid_from'}, inplace=True)
 
-        ##Preciso dar um jeito de passar o version number ja. Ja estou passando o valid from também. Para tentar processar tudo de uma vez só
-        # r_2 = pd.merge(r, self.versions_df, on='version_valid_from')
-        # r_2.rename(columns={'version_number':'_original_version'}, inplace=True)
-
         cols = list(dataframe.columns)
         cols.append('_valid_from')
         cols.append('_original_version')
@@ -290,10 +286,9 @@ class Collection:
         minVersion = float('-inf')
         maxVersion = float('inf') 
  
-        processed_group['_evoluted'] = False                     
+        processed_group['_evoluted'] = False
         processed_group['_min_version_number'] = minVersion
         processed_group['_max_version_number'] = maxVersion
-        #processed_group['_evolution_list'] = []
 
         ### Verificação e processamento das alterações semanticas
         cols = list(processed_group.columns)
@@ -303,8 +298,7 @@ class Collection:
 
         while len(recheck_group) > 0:
             if i == 300:
-                recheck_group.to_csv('recheck_300.csv', index=False)
-                raise BaseException('Too many iterations. Checkpoint saved in recheck_300.csv')
+                raise BaseException(f'Semantic processing did not converge after 300 iterations; {len(recheck_group)} rows still pending')
 
             i+=1
             
@@ -312,43 +306,39 @@ class Collection:
             g['_row_uid'] = range(len(g)) ## per-row identity: removal by _original_id would also discard sibling rows of the same record
             recheck_group = pd.DataFrame()
 
-            for operationType in self.semantic_operations:                
+            for operationType in self.semantic_operations:
                 affected_versions = self.semantic_operations[operationType].check_if_many_affected(g)
 
-                j = 0
-                if affected_versions != None:                                                               
-                    j+=1
-                    
-                    for idx in range(len(affected_versions)):
-                        v = affected_versions[idx]
+                for idx in range(len(affected_versions)):
+                    v = affected_versions[idx]
 
-                        versions_updated = False
+                    versions_updated = False
 
-                        if v[2] == 'backward':
-                            altered = self.semantic_operations[operationType].evolute_many_backward(v[0], v[1])
-                            altered['_max_version_number'] = altered['previous_version']
-                            v[1]['_min_version_number'] = v[1]['version_number'] #matched records before semantic evolution
-                            
-                            recheck_group = pd.concat([recheck_group,altered, v[1]])
-                            alt_list = list(altered['_row_uid'])
-                            g=g.loc[~g['_row_uid'].isin(alt_list)]
+                    if v[2] == 'backward':
+                        altered = self.semantic_operations[operationType].evolute_many_backward(v[0], v[1])
+                        altered['_max_version_number'] = altered['previous_version']
+                        v[1]['_min_version_number'] = v[1]['version_number'] #matched records before semantic evolution
 
-                            if len(altered) >0:
-                                versions_updated = True
-                        else:
-                            altered = self.semantic_operations[operationType].evolute_many_forward(v[0], v[1])
-                            altered['_min_version_number'] = altered['next_version']
-                            v[1]['_max_version_number'] = v[1]['version_number'] #matched records before semantic evolution
-                            recheck_group = pd.concat([recheck_group,altered, v[1]])
-                            alt_list = list(altered['_row_uid'])
-                            g=g.loc[~g['_row_uid'].isin(alt_list)]
+                        recheck_group = pd.concat([recheck_group,altered, v[1]])
+                        alt_list = list(altered['_row_uid'])
+                        g=g.loc[~g['_row_uid'].isin(alt_list)]
 
-                            if len(altered) >0:
-                                versions_updated = True
+                        if len(altered) >0:
+                            versions_updated = True
+                    else:
+                        altered = self.semantic_operations[operationType].evolute_many_forward(v[0], v[1])
+                        altered['_min_version_number'] = altered['next_version']
+                        v[1]['_max_version_number'] = v[1]['version_number'] #matched records before semantic evolution
+                        recheck_group = pd.concat([recheck_group,altered, v[1]])
+                        alt_list = list(altered['_row_uid'])
+                        g=g.loc[~g['_row_uid'].isin(alt_list)]
 
-                        if versions_updated: ## If there has been any alteration, affected versions must be checked under new min_version_number and max_version_number, to avoid a loop of alterations due to unupdated versions
-                            recheck_affected = pd.concat([g, altered[cols], (v[1])[cols]])
-                            affected_versions = self.semantic_operations[operationType].check_if_many_affected(recheck_affected)
+                        if len(altered) >0:
+                            versions_updated = True
+
+                    if versions_updated: ## If there has been any alteration, affected versions must be checked under new min_version_number and max_version_number, to avoid a loop of alterations due to unupdated versions
+                        recheck_affected = pd.concat([g, altered[cols], (v[1])[cols]])
+                        affected_versions = self.semantic_operations[operationType].check_if_many_affected(recheck_affected)
                         
             
             if len(g) > 0: # O que ta no g nao foi tocado por nenhuma alteração semantica e já pode ser inserido direto
@@ -971,39 +961,9 @@ class Collection:
         #E tambem que dados possam ser inseridos com tempo anterior, e assumir a versao da época.
 
         if(VersionNumber == None):
-            VersionNumber = self.current_version           
-        
-        ##obtaining version to be queried
-        
-        to_process = []
-        to_process.append(Query) 
-        
-        
-        while len(to_process) > 0:
-            field = to_process.pop()
+            VersionNumber = self.current_version
 
-            if isinstance(field, dict): 
-                if(len(field.keys()) > 1):
-                    for f in field.keys():
-                        to_process.append({field: field[f]})
-                    continue           
-                else:
-                    key = list(field.keys())[0]
-                    value = field[key]
-                    
-                    if not isinstance(value, str):
-                        to_process.append(value)
-                    
-                    field = key #keep process going for this iteration
-            
-            elif isinstance(field, list):
-                to_process.extend(field)
-                continue
-
-            if not isinstance(field,str) or field[0] == '$' or field[0]=='_': #pymongo operators like $and, $or, etc                
-                continue                           
-
-        Query['_min_version_number'] = {'$lte' : VersionNumber} ##Retornando registros traduzidos. 
+        Query['_min_version_number'] = {'$lte' : VersionNumber} ##Retornando registros traduzidos.
         Query['_max_version_number'] = {'$gte' : VersionNumber} ##Retornando registros traduzidos. 
 
         if isCount:

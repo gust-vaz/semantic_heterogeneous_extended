@@ -1,4 +1,3 @@
-import multiprocessing
 import shutil
 from .Collection import Collection
 from .GroupingOperation import GroupingOperation

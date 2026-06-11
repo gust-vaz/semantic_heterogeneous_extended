@@ -1,10 +1,8 @@
 import random
 import uuid
 import pandas as pd
-from  .SemanticOperation import SemanticOperation
 import datetime
 from argparse import ArgumentError
-from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.write_concern import WriteConcern
 from pymongo.read_concern import ReadConcern
 
@@ -115,7 +113,7 @@ class UngroupingOperation:
             "from": oldValue,
             "to": newValues
         }
-        if next_version is not None and 'version_valid_from' in next_version:
+        if 'version_valid_from' in next_version:
             new_version['next_version'] = next_version['version_number']
             new_version['next_version_valid_from'] = next_version['version_valid_from']
             new_version['next_operation'] = previous_version['next_operation']
@@ -138,7 +136,7 @@ class UngroupingOperation:
                 raise RuntimeError(
                     "Version chain conflict: another operation already appended to this position. Retry required."
                 )
-            if next_version is not None and 'version_valid_from' in next_version:
+            if 'version_valid_from' in next_version:
                 self.collection._col_versions_w.update_one(
                     {'version_number': next_version['version_number']},
                     {'$set': {'previous_version': new_version_number}},
@@ -159,11 +157,10 @@ class UngroupingOperation:
         self.collection.update_versions()
 
         if self.collection.operation_mode == 'preprocess':
-            if next_version is not None:
-                self.collection.collection_processed.update_many(
-                    {'_evolution_list': previous_version['_id']},
-                    {'$push': {'_evolution_list': i.inserted_id}}
-                )
+            self.collection.collection_processed.update_many(
+                {'_evolution_list': previous_version['_id']},
+                {'$push': {'_evolution_list': i.inserted_id}}
+            )
             self.collection.check_if_operation_affected_forward(fieldName, oldValue, new_version_number)
             self.collection.check_if_operation_affected_backward(fieldName, oldValue, new_version_number)
             for value in newValues:
