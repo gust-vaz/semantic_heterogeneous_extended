@@ -308,7 +308,8 @@ class Collection:
 
             i+=1
             
-            g = recheck_group[cols]
+            g = recheck_group[cols].copy()
+            g['_row_uid'] = range(len(g)) ## per-row identity: removal by _original_id would also discard sibling rows of the same record
             recheck_group = pd.DataFrame()
 
             for operationType in self.semantic_operations:                
@@ -328,9 +329,9 @@ class Collection:
                             altered['_max_version_number'] = altered['previous_version']
                             v[1]['_min_version_number'] = v[1]['version_number'] #matched records before semantic evolution
                             
-                            recheck_group = pd.concat([recheck_group,altered, v[1]])   
-                            alt_list = list(altered['_original_id'])                             
-                            g=g.loc[~g['_original_id'].isin(alt_list)] 
+                            recheck_group = pd.concat([recheck_group,altered, v[1]])
+                            alt_list = list(altered['_row_uid'])
+                            g=g.loc[~g['_row_uid'].isin(alt_list)]
 
                             if len(altered) >0:
                                 versions_updated = True
@@ -339,19 +340,19 @@ class Collection:
                             altered['_min_version_number'] = altered['next_version']
                             v[1]['_max_version_number'] = v[1]['version_number'] #matched records before semantic evolution
                             recheck_group = pd.concat([recheck_group,altered, v[1]])
-                            alt_list = list(altered['_original_id'])                             
-                            g=g.loc[~g['_original_id'].isin(alt_list)] 
+                            alt_list = list(altered['_row_uid'])
+                            g=g.loc[~g['_row_uid'].isin(alt_list)]
 
                             if len(altered) >0:
                                 versions_updated = True
-                        
+
                         if versions_updated: ## If there has been any alteration, affected versions must be checked under new min_version_number and max_version_number, to avoid a loop of alterations due to unupdated versions
                             recheck_affected = pd.concat([g, altered[cols], (v[1])[cols]])
                             affected_versions = self.semantic_operations[operationType].check_if_many_affected(recheck_affected)
                         
             
             if len(g) > 0: # O que ta no g nao foi tocado por nenhuma alteração semantica e já pode ser inserido direto
-                self._col_processed_w.insert_many(g.to_dict('records'))
+                self._col_processed_w.insert_many(g.drop(columns=['_row_uid']).to_dict('records'))
         
     
     def __process_query(self,QueryString):
