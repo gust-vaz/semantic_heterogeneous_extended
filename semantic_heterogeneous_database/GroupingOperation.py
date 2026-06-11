@@ -218,7 +218,9 @@ class GroupingOperation:
             if len(versions_df_p) > 0:
                 grouped_df = versions_df_p.groupby(by='next_operation.field')
 
-                for field, group in grouped_df:                    
+                for field, group in grouped_df:
+                    if field not in DocumentsDataFrame.columns: # documents are schemaless; an evolved field may be absent from this batch
+                        continue
                     versions_g = versions_df_p.loc[versions_df_p['next_operation.field'] == field]
                     merged_records = pd.merge(DocumentsDataFrame, versions_g, how='left', left_on=field, right_on='next_operation.from')
 
