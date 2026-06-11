@@ -153,8 +153,8 @@ def update_and_read_test(percent_of_update, insert_first_selected):
         if operation: 
             record = records.pop()            
             r['generator'].collection.insert_one(json.dumps(record, default=str),record['valid_from_date'])                                    
-        else:            
-            r['generator'].collection.find_many(queries.pop())                     
+        else:
+            list(r['generator'].collection.find_many(queries.pop()))
 
     end = time.time()      
         
@@ -175,7 +175,7 @@ def update_and_read_test(percent_of_update, insert_first_selected):
             record = records_2.pop()
             base_collection.insert_one(record)                      
         else:
-            base_collection.find(queries_2.pop()) ##Isso nao faz exatamente sentido. Deveria gerar uma nova query 
+            list(base_collection.find(queries_2.pop())) ## materialize the cursor; pymongo find() alone sends nothing to the server
     end = time.time()    
     baseline_time = (end-start)
     client.drop_database(r['generator'].database_name)
