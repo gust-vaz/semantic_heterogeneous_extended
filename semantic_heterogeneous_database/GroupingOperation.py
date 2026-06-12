@@ -40,10 +40,9 @@ class GroupingOperation(SemanticOperation):
         return_obj = set()
 
 
-        original_version = versions_df.loc[versions_df['version_number'] == Document['_original_version']].iloc[0]
 
         if 'next_operation.type' in versions_df.columns:
-            versions_df_p = versions_df.loc[(versions_df['next_operation.type'].isin(['merging', 'grouping'])) & (versions_df['next_version_valid_from'] > original_version['version_valid_from']) & (versions_df['next_version'] <= Document['_max_version_number']) & (versions_df['next_version'] >= Document['_min_version_number']) ]
+            versions_df_p = versions_df.loc[(versions_df['next_operation.type'].isin(['merging', 'grouping'])) & (versions_df['next_version'] > Document['_original_version']) & (versions_df['next_version'] < Document['_max_version_number']) & (versions_df['next_version'] >= Document['_min_version_number']) ]
 
             if len(versions_df_p) > 0:
                 if {'next_operation.type','next_operation.field', 'next_operation.from'}.issubset(versions_df.columns):
@@ -91,7 +90,7 @@ class GroupingOperation(SemanticOperation):
                     versions_g = versions_df_p.loc[versions_df_p['next_operation.field'] == field]
                     merged_records = pd.merge(DocumentsDataFrame, versions_g, how='left', left_on=field, right_on='next_operation.from')
 
-                    merged_records['match'] = (merged_records['next_operation.field'].notna()) & (merged_records['next_version_valid_from'] > merged_records['_valid_from']) & (merged_records['next_version'] < merged_records['_max_version_number']) & (merged_records['next_version'] >= merged_records['_min_version_number'])
+                    merged_records['match'] = (merged_records['next_operation.field'].notna()) & (merged_records['next_version'] > merged_records['_original_version']) & (merged_records['next_version'] < merged_records['_max_version_number']) & (merged_records['next_version'] >= merged_records['_min_version_number'])
                     matched = merged_records.loc[merged_records['match']]
 
                     return_obj.append((field, matched, 'forward'))

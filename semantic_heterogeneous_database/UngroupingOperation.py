@@ -39,10 +39,9 @@ class UngroupingOperation(SemanticOperation):
         versions_df = self.collection.versions_df
         return_obj = list()
 
-        original_version = versions_df.loc[versions_df['version_number'] == Document['_original_version']].iloc[0]
 
         if 'previous_operation.type' in versions_df.columns:
-            versions_df_p = versions_df.loc[(versions_df['previous_operation.type'].isin(['splitting', 'ungrouping']))& (versions_df['previous_version_valid_from'] < original_version['version_valid_from']) & (versions_df['previous_version'] <= Document['_max_version_number']) & (versions_df['previous_version'] >= Document['_min_version_number']) ] #Operacao precisa partir de versao igual ou inferior a atual
+            versions_df_p = versions_df.loc[(versions_df['previous_operation.type'].isin(['splitting', 'ungrouping'])) & (versions_df['version_number'] <= Document['_original_version']) & (versions_df['previous_version'] <= Document['_max_version_number']) & (versions_df['previous_version'] > Document['_min_version_number']) ] #Operacao precisa partir de versao igual ou inferior a atual
             versions_df_p = versions_df_p.explode('previous_operation.from')
 
             if len(versions_df_p) > 0:
@@ -93,7 +92,7 @@ class UngroupingOperation(SemanticOperation):
                     versions_g = versions_df_p.loc[versions_df_p['previous_operation.field'] == field]
                     merged_records = pd.merge(DocumentsDataFrame, versions_g, how='left', left_on=field, right_on='previous_operation.from')
 
-                    merged_records['match'] = (merged_records['previous_operation.field'].notna()) & (merged_records['previous_version_valid_from'] < merged_records['_valid_from']) & (merged_records['previous_version'] <= merged_records['_max_version_number']) & (merged_records['previous_version'] >= merged_records['_min_version_number'])
+                    merged_records['match'] = (merged_records['previous_operation.field'].notna()) & (merged_records['version_number'] <= merged_records['_original_version']) & (merged_records['previous_version'] <= merged_records['_max_version_number']) & (merged_records['previous_version'] > merged_records['_min_version_number'])
                     matched = merged_records.loc[merged_records['match']]
 
                     return_obj.append((field, matched, 'backward'))
