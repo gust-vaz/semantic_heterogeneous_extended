@@ -29,6 +29,18 @@ def test_invalid_operation_mode_raises_mellowdb_error():
         BasicCollection("any_db", "col", MONGO_HOST, "bogus_mode")
 
 
+def test_unsupported_direction_raises(make_collection):
+    """Directions an operation cannot support fail loudly and uniformly —
+    not with a silent None (old grouping) or AttributeError (old ungrouping)."""
+    col = make_collection('preprocess')
+    grouping = col.collection.semantic_operations['merging']
+    with pytest.raises(UnsupportedDirectionError):
+        grouping.evolute_backward({}, None)
+    ungrouping = col.collection.semantic_operations['splitting']
+    with pytest.raises(UnsupportedDirectionError):
+        ungrouping.evolute_forward({}, None)
+
+
 def test_missing_operation_argument_raises_invalid_arguments(make_collection):
     col = make_collection('preprocess')
     with pytest.raises(InvalidOperationArguments):
