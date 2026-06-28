@@ -6,7 +6,11 @@ import random
 import math
 import pandas as pd
 from pymongo import MongoClient
+# benchmarks/ scripts run in-place; put the repo root on the path so the
+# semantic_heterogeneous_database package (not pip-installed) imports.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database_generator import DatabaseGenerator
+from bench_utils import effective_write_concern
 pd.options.mode.chained_assignment = None  # default='warn'
 
 random.seed(42)
@@ -65,10 +69,11 @@ _raw_host = args.host or os.environ.get('MONGO_HOST', 'localhost')
 mongo_uri = args.mongo_uri or f"mongodb://{_raw_host}:27017/?directConnection=true"
 write_concern = args.write_concern
 nodes = args.nodes
+effective_wc = effective_write_concern(write_concern, nodes)
 performance_results = pd.DataFrame()
 
 def insert_first():
-    d = DatabaseGenerator(host=mongo_uri)
+    d = DatabaseGenerator(host=mongo_uri, write_concern=effective_wc)
     d.generate(number_of_records=number_of_records, number_of_versions=1, number_of_fields=number_of_fields,number_of_values_in_domain=number_of_values_in_domain,number_of_evolution_fields=number_of_evolution_fields, operation_mode=operation_mode)
     records = pd.DataFrame(d.records)
 
@@ -90,7 +95,7 @@ def insert_first():
     return ret
 
 def operations_first():
-    d = DatabaseGenerator(host=mongo_uri)
+    d = DatabaseGenerator(host=mongo_uri, write_concern=effective_wc)
     print('Generating Records')
     d.generate(number_of_records=number_of_records, number_of_versions=1, number_of_fields=number_of_fields,number_of_values_in_domain=number_of_values_in_domain,number_of_evolution_fields=number_of_evolution_fields, operation_mode=operation_mode)
     records = pd.DataFrame(d.records)

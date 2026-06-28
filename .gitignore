@@ -4,4 +4,4 @@ dataset
 __pycache__
 .venv
 docs
-results.csv
+results/

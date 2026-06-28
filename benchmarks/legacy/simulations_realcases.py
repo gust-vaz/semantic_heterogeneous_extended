@@ -9,6 +9,12 @@ import math
 import pandas as pd
 from datetime import datetime
 from pymongo import MongoClient
+import sys
+# Legacy script in benchmarks/legacy/: put benchmarks/ (for database_generator) and
+# the repo root (for the semantic_heterogeneous_database package) on the path.
+_legacy_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(os.path.dirname(_legacy_dir)))  # repo root
+sys.path.insert(0, os.path.dirname(_legacy_dir))                   # benchmarks/
 from database_generator import DatabaseGenerator
 from semantic_heterogeneous_database import BasicCollection
 import re

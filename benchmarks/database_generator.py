@@ -12,8 +12,9 @@ class DatabaseGenerator:
     FIELD_TYPES = ['int', 'float', 'datetime','string']
     OPERATION_TYPE = ['merging', 'translation','splitting']
 
-    def __init__(self, host='localhost'):
-        self.host = host     
+    def __init__(self, host='localhost', write_concern='majority'):
+        self.host = host
+        self.write_concern = write_concern
         self.operations = list() ## List to store randomly generated operations
         self.records = list()
         self.versions_dates = list()
@@ -204,7 +205,7 @@ class DatabaseGenerator:
         fieldsList = list(filter(lambda f: f[1] != 'float', self.fields)) # float fields are not suitable for merging and splitting
         self.evolution_fields = [random.choice(fieldsList) for i in range(number_of_evolution_fields)]
         
-        self.collection = BasicCollection(self.database_name, self.collection_name, self.host, operation_mode)
+        self.collection = BasicCollection(self.database_name, self.collection_name, self.host, operation_mode, write_concern=self.write_concern)
 
         self.versions_dates.append(datetime(1700,1,1))
              

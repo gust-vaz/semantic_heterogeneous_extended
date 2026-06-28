@@ -4,6 +4,10 @@ import time
 import pandas as pd
 from datetime import datetime
 from pymongo import MongoClient
+import sys
+# Legacy script in benchmarks/legacy/: put the repo root on the path for the
+# semantic_heterogeneous_database package (not pip-installed).
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from semantic_heterogeneous_database import BasicCollection
 import re
 pd.options.mode.chained_assignment = None 
