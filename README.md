@@ -227,6 +227,8 @@ uv run pytest semantic_heterogeneous_database/tests/ tests/distributed/ -m "not 
 | `--mongo_uri` | string | Full MongoDB URI — use for replica sets |
 | `--write_concern` | string | Write concern: `1`, `majority` (default), or `all` |
 | `--nodes` | int | Replica-set member count — written to the CSV as metadata |
+| `--read_uri` | string | Direct URI of the node to read records from (e.g. a secondary). Default: read from the primary |
+| `--read_mode` | string | `split` (default): version chain from primary, records from `--read_uri`; `single_source`: everything from `--read_uri` |
 
 ### Initialization strategies
 
@@ -317,4 +319,38 @@ col.pretty_print(results)
 
 # Create indexes for better query performance
 col.create_index(['city'])
+```
+
+### Reading from a specific node (replica sets)
+
+On a replica set you can offload the heavy *record* reads to a chosen node while the
+*version chain* (which must stay fresh for correct translation) keeps reading from the
+primary. Writes always go to the primary — MongoDB enforces this.
+
+```python
+# read_mode='split' (default):
+#   writes        -> primary    (localhost:27017)
+#   version chain -> primary    (localhost:27017)
+#   record data   -> secondary  (localhost:27018)
+col = BasicCollection(
+    'mydb', 'mycollection',
+    mongo_uri='mongodb://localhost:27017/?directConnection=true',   # primary   -> writes + version chain
+    read_uri='mongodb://localhost:27018/?directConnection=true',    # secondary -> record data
+    read_mode='split',
+)
+
+# read_mode='single_source' (read everything from one node; accepts staleness on purpose):
+#   writes        -> primary    (localhost:27017)
+#   version chain -> secondary  (localhost:27019)
+#   record data   -> secondary  (localhost:27019)
+col = BasicCollection(
+    'mydb', 'mycollection',
+    mongo_uri='mongodb://localhost:27017/?directConnection=true',   # primary   -> writes
+    read_uri='mongodb://localhost:27019/?directConnection=true',    # secondary -> version chain + record data
+    read_mode='single_source',
+)
+
+# Switch the read node / mode at runtime (e.g. point reads at a different secondary)
+col.set_read_source('mongodb://localhost:27019/?directConnection=true', read_mode='split')
+col.set_read_source(None)   # back to reading everything from the primary
 ```

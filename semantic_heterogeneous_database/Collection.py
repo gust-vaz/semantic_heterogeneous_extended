@@ -17,7 +17,9 @@ class Collection:
     def __init__(self, DatabaseName, CollectionName,
              mongo_uri='mongodb://localhost:27017',
              operation_mode='preprocess',
-             write_concern='majority'):
+             write_concern='majority',
+             read_uri=None,
+             read_mode='split'):
 
         if not isinstance(operation_mode, str) or operation_mode not in ['preprocess','rewrite']:
             raise MellowDBError('Operation Mode not recognized')
@@ -44,8 +46,13 @@ class Collection:
                 raise MellowDBError('Previous rewrite collection already exists.')            
 
 
+        self.collection_name = CollectionName
         self.collection = self.db[CollectionName]
         self.collection_versions = self.db[CollectionName + '_versions']
+
+        # Configure where the heavy record reads are served from. Defaults to the
+        # primary (same client). A separate read_uri routes record reads to a chosen node.
+        self._configure_read_source(read_uri, read_mode)
 
         if operation_mode == 'preprocess':
             self.collection_processed = self.db[CollectionName+'_processed']
@@ -123,13 +130,54 @@ class Collection:
 
     @property
     def _versions_r(self):
-        """Versions collection read from PRIMARY with majority concern on replica sets; default on standalone."""
+        """Read handle for the version chain.
+
+        split (default): always from the PRIMARY with majority concern on replica
+        sets — the version chain must be fresh so query translation stays correct.
+        single_source: from the chosen read node (accepts staleness on purpose).
+        """
+        if self._read_mode == 'single_source' and self._read_client is not self.client:
+            return self._read_versions
         if self._is_replica_set:
             return self.collection_versions.with_options(
                 read_preference=ReadPreference.PRIMARY,
                 read_concern=ReadConcern('majority')
             )
         return self.collection_versions
+
+    def _configure_read_source(self, read_uri=None, read_mode='split'):
+        """(Re)point where record reads are served from.
+
+        read_uri=None      -> record reads use the main (primary) connection (default).
+        read_uri='mongodb://host:port/?directConnection=true' -> record reads come
+                              from exactly that node, independent of read preference.
+        read_mode='split'  -> version chain stays on the primary; only records move.
+        read_mode='single_source' -> version chain reads from the read node too.
+        """
+        if read_mode not in ('split', 'single_source'):
+            raise MellowDBError("read_mode must be 'split' or 'single_source'")
+
+        # Close a previous dedicated read client, but never the main client.
+        previous = getattr(self, '_read_client', None)
+        if previous is not None and previous is not self.client:
+            previous.close()
+
+        self._read_uri = read_uri
+        self._read_mode = read_mode
+        if read_uri is None:
+            self._read_client = self.client
+            self._read_db = self.db
+        else:
+            self._read_client = MongoClient(read_uri)
+            self._read_db = self._read_client[self.database_name]
+
+        self._collection_read = self._read_db[self.collection_name]
+        self._processed_read = self._read_db[self.collection_name + '_processed']
+        self._read_versions = self._read_db[self.collection_name + '_versions']
+
+    def set_read_source(self, read_uri=None, read_mode='split'):
+        """Switch the record-read node/mode at runtime without rebuilding the collection."""
+        self._configure_read_source(read_uri, read_mode)
 
     def register_operation(self, OperationKey, SemanticOperationClass):
         self.semantic_operations[OperationKey] = SemanticOperationClass
@@ -783,9 +831,9 @@ class Collection:
             }
         ]
         
-        results = self.collection.aggregate(pipeline)
+        results = self._collection_read.aggregate(pipeline)
 
-        return results   
+        return results
 
 
     def __rewrite_and_query(self, QueryString):
@@ -1016,9 +1064,9 @@ class Collection:
         Query['_max_version_number'] = {'$gte' : VersionNumber} ##Retornando registros traduzidos. 
 
         if isCount:
-            return self.collection_processed.count_documents(Query)
+            return self._processed_read.count_documents(Query)
         else:
-            return self.collection_processed.find(Query)
+            return self._processed_read.find(Query)
 
     def execute_operation(self, operationType, validFrom, args):                  
         operation = self.semantic_operations[operationType]
@@ -1100,7 +1148,7 @@ class Collection:
         for record in records:            
 
             if record['_evoluted'] == True:
-                originalRecord = self.collection.find_one({'_id' : record['_original_id']})
+                originalRecord = self._collection_read.find_one({'_id' : record['_original_id']})
 
             for field in record.keys():               
 

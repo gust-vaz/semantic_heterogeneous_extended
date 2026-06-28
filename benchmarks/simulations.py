@@ -45,6 +45,19 @@ parser.add_argument(
     default=1,
     help="Number of replica set nodes (metadata label for output CSV)"
 )
+parser.add_argument(
+    "--read_uri",
+    default=None,
+    help="Direct URI of the node to read records from, e.g. "
+         "mongodb://localhost:27018/?directConnection=true. Default: read from the primary."
+)
+parser.add_argument(
+    "--read_mode",
+    default="split",
+    choices=["split", "single_source"],
+    help="split (default): version chain from primary, records from --read_uri node; "
+         "single_source: read everything from the --read_uri node"
+)
 
 args = parser.parse_args()
 
@@ -69,11 +82,13 @@ _raw_host = args.host or os.environ.get('MONGO_HOST', 'localhost')
 mongo_uri = args.mongo_uri or f"mongodb://{_raw_host}:27017/?directConnection=true"
 write_concern = args.write_concern
 nodes = args.nodes
+read_uri = args.read_uri
+read_mode = args.read_mode
 effective_wc = effective_write_concern(write_concern, nodes)
 performance_results = pd.DataFrame()
 
 def insert_first():
-    d = DatabaseGenerator(host=mongo_uri, write_concern=effective_wc)
+    d = DatabaseGenerator(host=mongo_uri, write_concern=effective_wc, read_uri=read_uri, read_mode=read_mode)
     d.generate(number_of_records=number_of_records, number_of_versions=1, number_of_fields=number_of_fields,number_of_values_in_domain=number_of_values_in_domain,number_of_evolution_fields=number_of_evolution_fields, operation_mode=operation_mode)
     records = pd.DataFrame(d.records)
 
@@ -95,7 +110,7 @@ def insert_first():
     return ret
 
 def operations_first():
-    d = DatabaseGenerator(host=mongo_uri, write_concern=effective_wc)
+    d = DatabaseGenerator(host=mongo_uri, write_concern=effective_wc, read_uri=read_uri, read_mode=read_mode)
     print('Generating Records')
     d.generate(number_of_records=number_of_records, number_of_versions=1, number_of_fields=number_of_fields,number_of_values_in_domain=number_of_values_in_domain,number_of_evolution_fields=number_of_evolution_fields, operation_mode=operation_mode)
     records = pd.DataFrame(d.records)
@@ -204,6 +219,8 @@ for i in range(number_of_tests):
         'method': method,
         'nodes': nodes,
         'write_concern': write_concern,
+        'read_mode': read_mode,
+        'read_uri': read_uri,
         'insertion_phase': tests_result['insertion_phase'],
         'operations_baseline': tests_result['operations_baseline'],
         'operations_phase': tests_result['operations_phase']

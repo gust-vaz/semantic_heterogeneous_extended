@@ -12,7 +12,9 @@ class BasicCollection:
     def __init__(self, DatabaseName, CollectionName,
                  mongo_uri='mongodb://localhost:27017',
                  operation_mode='preprocess',
-                 write_concern='majority'):
+                 write_concern='majority',
+                 read_uri=None,
+                 read_mode='split'):
         if not isinstance(operation_mode, str) or operation_mode not in ['preprocess','rewrite']:
             raise MellowDBError('Operation Mode not recognized')
 
@@ -21,6 +23,8 @@ class BasicCollection:
         self.collection_name = CollectionName
         self.mongo_uri = mongo_uri
         self.write_concern = write_concern
+        self.read_uri = read_uri
+        self.read_mode = read_mode
 
         self.initialize_collection()
 
@@ -28,7 +32,7 @@ class BasicCollection:
     def initialize_collection(self):
         self.collection = Collection(self.database_name, self.collection_name,
                                      self.mongo_uri, self.operation_mode,
-                                     self.write_concern)
+                                     self.write_concern, self.read_uri, self.read_mode)
 
         # Register operations with new names
         self.collection.register_operation('translation', TranslationOperation(self))
@@ -38,6 +42,12 @@ class BasicCollection:
         # Register operations with old names for backward compatibility
         self.collection.register_operation('grouping', GroupingOperation(self))
         self.collection.register_operation('ungrouping', UngroupingOperation(self))
+
+    def set_read_source(self, read_uri=None, read_mode='split'):
+        """Switch the record-read node/mode at runtime (e.g. point reads at a secondary)."""
+        self.read_uri = read_uri
+        self.read_mode = read_mode
+        self.collection.set_read_source(read_uri, read_mode)
 
     def insert_one(self, JsonString, ValidFromDate:datetime):
         self.collection.insert_one(JsonString, ValidFromDate)

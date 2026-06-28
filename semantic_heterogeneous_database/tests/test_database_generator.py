@@ -46,3 +46,15 @@ def test_database_name_unique_even_with_same_seed():
         "Seeded runs produced the same database name; a crashed run would "
         "poison every subsequent benchmark run"
     )
+
+
+def test_generator_forwards_read_config_to_collection():
+    """read_uri/read_mode passed to the generator reach the underlying collection."""
+    random.seed(7)
+    d = DatabaseGenerator(host=MONGO_HOST, read_uri=MONGO_HOST, read_mode='single_source')
+    _generate_tiny(d)
+    try:
+        assert d.collection.read_uri == MONGO_HOST
+        assert d.collection.read_mode == 'single_source'
+    finally:
+        d.destroy()
