@@ -66,9 +66,14 @@ class UngroupingOperation(SemanticOperation):
         return list(return_obj)
 
     def evolute_backward(self, Document, operation):
-        if Document[operation['previous_operation.field'].values[0]] == operation['previous_operation.from'].values[0]:
+        field = operation['previous_operation.field'].values[0]
+        from_values = operation['previous_operation.from'].values[0]
+        # previous_operation.from is the list of split fragments; match by
+        # membership, mirroring check_if_affected (the bulk path explodes it).
+        is_affected = (Document[field] in from_values) if isinstance(from_values, list) else (Document[field] == from_values)
+        if is_affected:
             Document = Document.copy()
-            Document[operation['previous_operation.field'].values[0]] = operation['previous_operation.to'].values[0]
+            Document[field] = operation['previous_operation.to'].values[0]
             return Document
         else:
             raise MellowDBError('Record should not be evoluted')

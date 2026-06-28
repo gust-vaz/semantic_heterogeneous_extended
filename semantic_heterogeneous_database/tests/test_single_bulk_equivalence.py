@@ -61,6 +61,10 @@ def test_old_value_after_operation(make_collection):
     _compare(make_collection, [{'city': 'A', 'pop': 1, 'valid_from_date': datetime(2012, 1, 1)}])
 
 
+def test_split_fragment_after_operation(make_collection):
+    _compare(make_collection, [{'city': 'S1', 'pop': 1, 'valid_from_date': datetime(2016, 1, 1)}])
+
+
 def test_chained_record_before_everything(make_collection):
     _compare(make_collection, [{'city': 'A', 'pop': 1, 'valid_from_date': datetime(1990, 1, 1)}])
 

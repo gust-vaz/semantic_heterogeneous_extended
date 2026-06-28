@@ -1,0 +1,133 @@
+services:
+  mongo-primary:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: mongod --replSet rs0 --bind_ip_all --port 27017 --wiredTigerCacheSizeGB 0.3
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo5-primary-data:/data/db
+    networks:
+      - mellow-rs5-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--port", "27017", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  mongo-secondary-1:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: mongod --replSet rs0 --bind_ip_all --port 27018 --wiredTigerCacheSizeGB 0.3
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
+    ports:
+      - "27018:27018"
+    volumes:
+      - mongo5-secondary-1-data:/data/db
+    networks:
+      - mellow-rs5-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--port", "27018", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  mongo-secondary-2:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: mongod --replSet rs0 --bind_ip_all --port 27019 --wiredTigerCacheSizeGB 0.3
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
+    ports:
+      - "27019:27019"
+    volumes:
+      - mongo5-secondary-2-data:/data/db
+    networks:
+      - mellow-rs5-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--port", "27019", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  mongo-secondary-3:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: mongod --replSet rs0 --bind_ip_all --port 27020 --wiredTigerCacheSizeGB 0.3
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
+    ports:
+      - "27020:27020"
+    volumes:
+      - mongo5-secondary-3-data:/data/db
+    networks:
+      - mellow-rs5-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--port", "27020", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  mongo-secondary-4:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: mongod --replSet rs0 --bind_ip_all --port 27021 --wiredTigerCacheSizeGB 0.3
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
+    ports:
+      - "27021:27021"
+    volumes:
+      - mongo5-secondary-4-data:/data/db
+    networks:
+      - mellow-rs5-net
+    healthcheck:
+      test: ["CMD", "mongosh", "--port", "27021", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  mongo-init:
+    image: mongo:8.0.12
+    restart: "no"
+    depends_on:
+      mongo-primary:
+        condition: service_healthy
+      mongo-secondary-1:
+        condition: service_healthy
+      mongo-secondary-2:
+        condition: service_healthy
+      mongo-secondary-3:
+        condition: service_healthy
+      mongo-secondary-4:
+        condition: service_healthy
+    command: >
+      mongosh --host mongo-primary:27017
+      /docker-entrypoint-initdb.d/init-replicaset5.js
+    volumes:
+      - ./docker/replicaset/init-replicaset5.js:/docker-entrypoint-initdb.d/init-replicaset5.js:ro
+    networks:
+      - mellow-rs5-net
+
+networks:
+  mellow-rs5-net:
+    driver: bridge
+
+volumes:
+  mongo5-primary-data:
+  mongo5-secondary-1-data:
+  mongo5-secondary-2-data:
+  mongo5-secondary-3-data:
+  mongo5-secondary-4-data:
