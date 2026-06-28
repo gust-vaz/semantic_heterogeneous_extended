@@ -2,6 +2,11 @@ services:
   mongodb:
     image: mongo:8.0
     restart: no
+    command: mongod --bind_ip_all --wiredTigerCacheSizeGB 0.3
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
     ports:
       - "27017:27017"
     volumes:
