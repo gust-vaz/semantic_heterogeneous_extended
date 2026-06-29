@@ -22,3 +22,10 @@ def test_resolve_mongo_uri_prefers_explicit_override():
 def test_resolve_mongo_uri_single_default():
     assert resolve_mongo_uri(deployment="single", mongo_uri=None) == \
         "mongodb://localhost:27017/?directConnection=true"
+
+
+def test_main_up_without_deployment_errors_cleanly(capsys):
+    from mellow_cli.__main__ import main
+    rc = main(["up"])
+    assert rc == 1
+    assert "deployment" in capsys.readouterr().err.lower()

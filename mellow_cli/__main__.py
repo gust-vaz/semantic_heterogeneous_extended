@@ -88,8 +88,12 @@ def main(argv=None):
         return 1
 
     if args.command == "up":
-        Deployment(args.deployment).up()
-        Repl(_make_session(args), Deployment(args.deployment)).run()
+        if not args.deployment:
+            print("error: `up` requires --deployment {single,rs3,rs5}", file=sys.stderr)
+            return 1
+        deployment = Deployment(args.deployment)
+        deployment.up()
+        Repl(_make_session(args), deployment).run()
         return 0
 
     if args.command in ("shell", "connect"):
