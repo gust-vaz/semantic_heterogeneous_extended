@@ -23,6 +23,15 @@ class MellowSession:
     def insert(self, json_string, valid_from):
         self._collection.insert_one(json_string, valid_from)
 
+    def load_csv(self, folder, date_field="RefDate", delimiter=",", date_format="%Y-%m-%d"):
+        self._collection.insert_many_by_csv(folder, date_field, date_format, delimiter)
+
+    def apply_operations_csv(self, file):
+        self._collection.execute_many_operations_by_csv(file, "type", "valid_from")
+
+    def apply_operation(self, op_type, valid_from, args):
+        self._collection.execute_operation(op_type, valid_from, args)
+
     def query(self, query):
         return list(self._collection.find_many(query))
 
