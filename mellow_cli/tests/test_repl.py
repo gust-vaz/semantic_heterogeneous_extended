@@ -55,3 +55,14 @@ def test_operations_csv_via_handle(make_session, tmp_path):
     repl.handle(f"load {folder} RefDate")
     repl.handle(f"operations {ops}")
     assert s.count({"cid": "Y"}) == 1
+
+
+def test_run_survives_malformed_input(make_session, monkeypatch, capsys):
+    s = make_session("preprocess")
+    repl = Repl(s)
+    lines = iter(["query {bad", "status", "exit"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(lines))
+    repl.run()
+    out = capsys.readouterr().out
+    assert "error" in out.lower()   # the bad query was reported, not crashed on
+    assert "preprocess" in out      # the session survived and ran the next command

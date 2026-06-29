@@ -17,3 +17,8 @@ def test_set_read_node_to_port_builds_direct_uri(make_session):
     s.set_read_node("primary")
     assert s.status()["read_node"] == "primary"
     assert s._collection.read_uri is None
+
+
+def test_status_shows_bare_port_when_constructed_with_read_uri(make_session):
+    s = make_session(read_uri="mongodb://localhost:27018/?directConnection=true")
+    assert s.status()["read_node"] == "27018"

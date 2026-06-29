@@ -71,7 +71,11 @@ class Repl:
             except (EOFError, KeyboardInterrupt):
                 print()
                 return
-            out = self.handle(line)
+            try:
+                out = self.handle(line)
+            except Exception as e:
+                print(f"error: {e}")
+                continue
             if out is None:
                 return
             if out:

@@ -14,7 +14,7 @@ class MellowSession:
         self.operation_mode = operation_mode
         self.write_concern = write_concern
         self.read_mode = read_mode
-        self.read_node = "primary" if read_uri is None else read_uri
+        self.read_node = self._node_label(read_uri)
         self._collection = BasicCollection(
             db, collection, mongo_uri, operation_mode,
             write_concern=write_concern, read_uri=read_uri, read_mode=read_mode,
@@ -50,6 +50,14 @@ class MellowSession:
             self._collection.set_read_source(read_uri, mode)
             self.read_node = str(node)
         self.read_mode = mode
+
+    @staticmethod
+    def _node_label(read_uri):
+        """Display label for a read source: 'primary', or the bare port of a direct URI."""
+        if read_uri is None:
+            return "primary"
+        host_port = read_uri.split("//", 1)[-1].split("/", 1)[0]
+        return host_port.rsplit(":", 1)[-1] if ":" in host_port else read_uri
 
     def status(self):
         return {
