@@ -56,7 +56,11 @@ class BasicCollection:
         self.collection.insert_many_by_dataframe(dataframe, ValidFromField)
     
     def insert_many_by_csv(self, FilePath, ValidFromField, ValidFromDateFormat='%Y-%m-%d', Delimiter=','):
-        source_folder = os.path.dirname(FilePath)
+        # Handle both file paths and folder paths
+        if os.path.isdir(FilePath):
+            source_folder = FilePath
+        else:
+            source_folder = os.path.dirname(FilePath)
 
         temp_destination = source_folder + '/temp/'
         shutil.rmtree(temp_destination, ignore_errors=True)
