@@ -40,3 +40,23 @@ class MellowSession:
 
     def drop(self):
         self._collection.collection.client.drop_database(self.db)
+
+    def set_read_node(self, node, mode="split"):
+        if node == "primary":
+            self._collection.set_read_source(None, mode)
+            self.read_node = "primary"
+        else:
+            read_uri = f"mongodb://localhost:{node}/?directConnection=true"
+            self._collection.set_read_source(read_uri, mode)
+            self.read_node = str(node)
+        self.read_mode = mode
+
+    def status(self):
+        return {
+            "db": self.db,
+            "collection": self.collection_name,
+            "operation_mode": self.operation_mode,
+            "write_concern": self.write_concern,
+            "read_node": self.read_node,
+            "read_mode": self.read_mode,
+        }
