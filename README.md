@@ -208,6 +208,44 @@ uv run pytest semantic_heterogeneous_database/tests/ tests/distributed/ -m "not 
 
 ---
 
+## Operator CLI (`mellow_cli`)
+
+An interactive shell + one-shot subcommands to operate a real database. Run from the repo root:
+
+```bash
+# Start a 3-node replica set and drop into the shell
+uv run python -m mellow_cli up --deployment rs3 --db mortality --mode preprocess
+
+# In the shell — load the DATASUS data, apply the CID-9→CID-10 evolutions, query
+mellow> load dataset/MellowDB_experiments/source_data RefDate
+mellow> operations dataset/MellowDB_experiments/semantic_operations/operations_cid9_cid10.csv
+mellow> query {'cid': '104 Acidentes de transporte'}
+mellow> read-node 27018          # offload record reads to a secondary (split mode)
+mellow> status
+mellow> exit                     # data + containers preserved
+```
+
+One-shot equivalents (each connects, runs, exits):
+
+```bash
+uv run python -m mellow_cli connect --deployment rs3 --db mortality   # reattach to the shell
+uv run python -m mellow_cli query --deployment rs3 --db mortality "{'cid': '104 Acidentes de transporte'}"
+uv run python -m mellow_cli destroy --deployment rs3 --db mortality --yes   # drop DB + docker compose down -v
+```
+
+| Command | Effect |
+|---------|--------|
+| `up --deployment single\|rs3\|rs5` | compose up + wait + connect |
+| `connect` / `shell` | attach to a running deployment (no Docker touch) |
+| `load <folder> [date_field]` | bulk-load a folder of CSVs (REPL); one-shot: `load <folder> --date-field RefDate` |
+| `operations <file>` | apply a `;`-delimited operations CSV |
+| `query '<dict>'` / `count '<dict>'` | query (dict or single-quoted dict syntax) |
+| `read-node <port\|primary> [split\|single_source]` | switch the record-read node live |
+| `drop --yes` | drop the database, keep Docker running |
+| `destroy --yes` | drop the database **and** `docker compose down -v` |
+
+---
+
 ## Simulation arguments
 
 | Argument | Type | Description |
