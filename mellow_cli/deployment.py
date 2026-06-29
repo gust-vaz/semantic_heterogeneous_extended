@@ -38,7 +38,30 @@ class Deployment:
 
     def up(self, wait=True, timeout=90):
         self._compose("up", "-d")
-        # readiness wait is added in Task 5
+        if wait:
+            self.wait_until_ready(timeout=timeout)
+
+    def primary_uri(self, client_factory=MongoClient):
+        if self.name == "single":
+            return node_uri(self.config["ports"][0])
+        seed = node_uri(self.config["ports"][0])
+        client = client_factory(seed, serverSelectionTimeoutMS=3000)
+        hello = client.admin.command("hello")
+        return node_uri(primary_port_from_hello(hello))
+
+    def wait_until_ready(self, timeout=90, client_factory=MongoClient):
+        seed = node_uri(self.config["ports"][0])
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                client = client_factory(seed, serverSelectionTimeoutMS=2000)
+                hello = client.admin.command("hello")
+                if self.name == "single" or hello.get("isWritablePrimary") or hello.get("primary"):
+                    return
+            except Exception:
+                pass
+            time.sleep(1.0)
+        raise TimeoutError(f"Deployment '{self.name}' not ready after {timeout}s")
 
     def down(self, purge=True):
         args = ["down", "-v"] if purge else ["down"]
