@@ -35,6 +35,10 @@ benchmarks; they differ only in how MongoDB is provided.
 All benchmark output goes to the git-ignored `results/` directory, so finished runs never
 clutter the repository.
 
+> Running the **distributed experiments** (B1/B3/B4/B6)? Skip straight to
+> [Running benchmarks](#running-benchmarks) — `./bench.sh` provisions the deployments
+> itself and needs nothing but Docker and bash.
+
 ---
 
 ## 1. Local
@@ -177,6 +181,104 @@ docker compose -f docker-compose.replicaset.yml down -v    # delete all data
 
 ---
 
+## Running benchmarks
+
+The distributed extension raises questions the original single-node benchmarks could not
+ask — does offloading reads to secondaries actually buy throughput, and does replication
+change which evolution strategy wins? `./bench.sh` answers them reproducibly.
+
+**Your machine needs only Docker and bash.** MongoDB, the MellowDB library and every
+experiment run inside containers; `bench.sh` just sequences them.
+
+```bash
+./bench.sh b1                       # profile=small, the experiment's default deployments
+./bench.sh b1 --profile smoke       # ~1 minute sanity run
+./bench.sh all --profile full       # the real result run
+```
+
+For each deployment in the sweep it runs: **compose up → wait for a healthy primary →
+run the experiment in an in-network runner container → write the CSV → `compose down -v`**.
+
+> **`bench.sh` is destructive by design.** Every cell ends with `docker compose down -v`,
+> which deletes that deployment's volumes so the next cell starts from clean data. Do not
+> point it at a deployment holding data you care about.
+
+### The experiments
+
+| ID | Question it answers | Default deployments |
+|----|---------------------|---------------------|
+| `b1` | Does routing record reads to secondaries raise aggregate query throughput? Workers are assigned nodes round-robin, so reads genuinely fan out. | `single,rs3,rs5` |
+| `b3` | What does durability cost as the cluster grows? Insert-only, swept across write concerns `1 / majority / all`. | `single,rs3,rs5` |
+| `b4` | Does distribution change which strategy wins? Mixed read/write across `preprocess` vs `rewrite`. | `single,rs3,rs5` |
+| `b6` | How does query cost grow as semantic operations stack up (chain length 1→50)? | `single,rs3` |
+
+`./bench.sh all` runs `b1`, `b3`, `b6`, then `b4` (largest matrix last).
+
+### Options
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `--profile <smoke\|small\|full>` | `small` | Sizing profile (below) |
+| `--deployments <csv>` | per experiment | Override the sweep, e.g. `single,rs3` |
+| `--corpus <synthetic\|real>` | `synthetic` | Data source |
+| `--out <dir>` | `results` | Output directory |
+| `--keep-going` | off | Continue the sweep after a failing cell |
+
+### Profiles
+
+Sizes are fixed data, never derived from the machine, so numbers stay comparable across
+machines. The default is deliberately small enough to finish on a modest laptop.
+
+| Profile | Records | Clients | Warmup | Window | Reps | Real-corpus files | Rough runtime |
+|---------|---------|---------|--------|--------|------|-------------------|---------------|
+| `smoke` | 1 000 | 2 | 2 s | 5 s | 1 | 1 | ~1 min |
+| `small` (default) | 20 000 | 4 | 5 s | 20 s | 3 | 3 | ~10 min |
+| `full` | 200 000 | 8 | 10 s | 60 s | 5 | all | hours |
+
+`records` sizes the synthetic corpus. The real corpus is sized instead by how many of the
+43 yearly DATASUS CSVs to load, since its record count is fixed by the data.
+
+### Synthetic vs real data
+
+The default corpus is **synthetic** — `DatabaseGenerator` fabricates records and semantic
+operations at runtime, so a fresh clone benchmarks with zero setup.
+
+`--corpus real` uses the DATASUS mortality dataset at
+`dataset/MellowDB_experiments/` (source CSVs plus the CID-9 → CID-10 operations). That
+directory is git-ignored; if it is missing, the run **fails immediately naming the expected
+path** rather than silently falling back to synthetic and mislabelling the results.
+
+> Real-corpus runs are far slower: loading a single yearly file plus its 170 semantic
+> operations takes roughly 3 minutes, and the corpus is rebuilt per cell.
+
+### Results
+
+Every experiment appends rows to `results/<experiment>/<experiment>_<profile>_<date>.csv`
+(git-ignored). **All four share one wide schema**, so the CSVs concatenate and filter
+cleanly in pandas:
+
+```python
+import pandas as pd, glob
+df = pd.concat([pd.read_csv(f) for f in glob.glob("results/*/*.csv")], ignore_index=True)
+```
+
+Columns worth knowing:
+
+| Column | Meaning |
+|--------|---------|
+| `read_target` | `primary`, `secondaries` (split mode), or `secondaries_single_source` |
+| `read_mode` | `split` = version chain from primary, records from the read node; `single_source` = both from the read node |
+| `mix` | `read_only`, `write_only`, `read_heavy` (95 % reads), `write_heavy` (5 % reads) |
+| `chain_length` | Number of stacked semantic operations in the corpus |
+| `setup_insert_s` / `setup_operations_s` | Corpus build cost — where `preprocess` pays and `rewrite` does not |
+| `error_rate` | Failed attempts / all attempts. Any cell above 1 % also prints a warning; treat those rows with suspicion |
+| `git_sha`, `mongo_version`, `host_cpus`, `host_mem_gb` | Provenance, so results from different machines are never silently compared |
+
+Columns that do not apply to an experiment are left empty. Plotting and analysis are done
+separately — nothing in this repository reads the CSVs back.
+
+---
+
 ## Running tests
 
 MellowDB has two test suites:
@@ -196,6 +298,21 @@ uv run pytest tests/distributed/ -m slow -v --timeout=180  # slow: failover + co
 # Everything (unit + fast distributed)
 uv run pytest semantic_heterogeneous_database/tests/ tests/distributed/ -m "not slow" -v
 ```
+
+### Running the tests without host Python
+
+The same suites run inside the runner container, so a machine with only Docker can execute
+them. Start a replica set first (way 3 above), then:
+
+```bash
+docker compose -f docker-compose.replicaset.yml run --rm \
+  --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  -e MONGO_HOST="mongodb://mongo-primary:27017/?directConnection=true" \
+  runner python -m pytest benchmarks/tests -m "not slow" -q
+```
+
+`--user` keeps any files the run creates owned by you rather than root. `MONGO_HOST` points
+at the Compose service hostname, which resolves inside the network but not from the host.
 
 ### What the distributed suite covers
 
@@ -295,10 +412,26 @@ semantic_heterogeneous_database/   # MellowDB library
   SemanticOperation.py             #   abstract base class
   tests/                           #   unit tests (any MongoDB topology)
 
+bench.sh                           # benchmark entrypoint — needs only Docker + bash
+
 benchmarks/                        # research scripts that use the library
-  simulations.py                   #   main benchmark CLI
+  harness/                         #   the benchmark harness
+    profiles.py                    #     smoke/small/full sizing
+    topology.py                    #     deployment → compose file + in-network node URIs
+    corpus.py                      #     synthetic and real DATASUS corpora
+    workload.py                    #     concurrent load driver (warmup + fixed window)
+    metrics.py                     #     throughput and latency percentiles
+    results.py                     #     shared wide CSV schema and writer
+    runner.py                      #     shared experiment plumbing
+  experiments/                     #   one module per experiment
+    b1_read_offloading.py          #     B1 — read offloading throughput
+    b3_write_replication.py        #     B3 — write cost of replication
+    b4_strategy_distribution.py    #     B4 — strategy × distribution
+    b6_chain_depth.py              #     B6 — version-chain depth
+  simulations.py                   #   older single-node benchmark CLI
   database_generator.py            #   synthetic record + operation generator
   bench_utils.py                   #   write-concern helpers
+  tests/                           #   harness and experiment tests
   legacy/                          #   older experiments, pending rework
     simulations_realcases.py       #     benchmark over the real DATASUS dataset
     simulations_realcases_operations.py
@@ -307,8 +440,8 @@ benchmarks/                        # research scripts that use the library
 tests/distributed/                 # tests that require a replica set
 docker/
   runner/                          #   Python 3.12 runner image
-  replicaset/                      #   rs.initiate() scripts (3- and 5-node)
-analysis/                          # R scripts that generate the paper figures
+  replicaset/                      #   rs.initiate() scripts (3- and 5-node, idempotent)
+analysis/                          # scripts that generate the paper figures
 
 docker-compose.yml                 # way 2 — single node
 docker-compose.replicaset.yml      # way 3 — 3-node replica set
