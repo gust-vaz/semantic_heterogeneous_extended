@@ -40,7 +40,7 @@ packages = ["semantic_heterogeneous_database", "mellow_cli"]
 
 [tool.pytest.ini_options]
 # Default test path so `pytest` (with no args) finds the right directory.
-testpaths = ["semantic_heterogeneous_database/tests", "mellow_cli/tests"]
+testpaths = ["semantic_heterogeneous_database/tests", "mellow_cli/tests", "benchmarks/tests"]
 markers = [
     "slow: marks tests as slow (experimental evaluation, not CI gates)",
 ]
