@@ -1,6 +1,7 @@
 """Shared plumbing every experiment module uses: CLI, client fan-out, row building."""
 
 import argparse
+import os
 import sys
 
 from benchmarks.harness import metrics, results, topology
@@ -22,6 +23,34 @@ def base_parser(experiment):
     parser.add_argument("--records", type=int, default=None,
                         help="Override the profile's synthetic record count")
     return parser
+
+
+def resolve_endpoints(deployment):
+    """Return (primary_uri, secondary_uris) for this deployment.
+
+    Inside the runner container the Compose service hostnames resolve, so
+    topology discovery is used. BENCH_PRIMARY_URI / BENCH_SECONDARY_URIS let a
+    host-side run (tests, manual probing) point at ports instead, since those
+    hostnames do not resolve outside the Compose network.
+    """
+    primary_override = os.environ.get("BENCH_PRIMARY_URI")
+    if not primary_override:
+        return topology.primary_uri(deployment), topology.secondary_uris(deployment)
+
+    raw = os.environ.get("BENCH_SECONDARY_URIS", "")
+    secondaries = [uri.strip() for uri in raw.split(",") if uri.strip()]
+    return primary_override, secondaries
+
+
+def warn_if_target_unavailable(read_target, secondaries):
+    """Guard against a row labelled 'secondaries' whose reads went to the primary."""
+    if read_target.startswith("secondaries") and not secondaries:
+        print(
+            f"WARNING: read_target='{read_target}' requested but no secondaries "
+            "are available; reads fall back to the primary and this row's "
+            "read_target label will not reflect where reads actually went",
+            file=sys.stderr,
+        )
 
 
 def read_targets_for(deployment):

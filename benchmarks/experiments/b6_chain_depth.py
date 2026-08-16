@@ -5,7 +5,6 @@ change the shape of that growth? Read-only workload over corpora built with
 increasing chain lengths.
 """
 
-import os
 import sys
 
 from benchmarks.harness import corpus as corpus_module
@@ -44,8 +43,7 @@ def main(argv=None):
     # confound the very thing this experiment measures.
     domain = corpus_module.domain_for_chain(max(lengths))
 
-    override = os.environ.get("BENCH_PRIMARY_URI")
-    primary = override or topology.primary_uri(args.deployment)
+    primary, _ = runner.resolve_endpoints(args.deployment)
     mongo_version = topology.server_version(primary)
 
     out_path = results.result_path(args.out, EXPERIMENT, args.profile)

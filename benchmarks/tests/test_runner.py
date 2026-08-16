@@ -1,6 +1,7 @@
 import pytest
 from benchmarks.harness.runner import (
     base_parser, read_targets_for, client_specs, row_from, warn_if_noisy,
+    resolve_endpoints, warn_if_target_unavailable,
 )
 from benchmarks.harness.workload import WorkloadResult
 from benchmarks.harness.corpus import CorpusHandle
@@ -92,4 +93,39 @@ def test_warn_if_noisy_flags_a_high_error_rate(capsys):
 
 def test_warn_if_noisy_stays_quiet_when_clean(capsys):
     warn_if_noisy({"ops": 100, "errors": 0, "deployment": "rs3", "read_target": "primary"})
+    assert capsys.readouterr().err == ""
+
+
+def test_resolve_endpoints_honours_both_env_overrides(monkeypatch):
+    monkeypatch.setenv("BENCH_PRIMARY_URI", "mongodb://localhost:27017/?directConnection=true")
+    monkeypatch.setenv("BENCH_SECONDARY_URIS",
+                       "mongodb://localhost:27018/?directConnection=true,"
+                       "mongodb://localhost:27019/?directConnection=true")
+    primary, secondaries = resolve_endpoints("rs3")
+    assert primary.endswith("27017/?directConnection=true")
+    assert len(secondaries) == 2
+    assert secondaries[1].endswith("27019/?directConnection=true")
+
+
+def test_resolve_endpoints_tolerates_no_secondary_override(monkeypatch):
+    monkeypatch.setenv("BENCH_PRIMARY_URI", "mongodb://localhost:27017/?directConnection=true")
+    monkeypatch.delenv("BENCH_SECONDARY_URIS", raising=False)
+    _, secondaries = resolve_endpoints("rs3")
+    assert secondaries == []
+
+
+def test_warn_when_secondaries_requested_but_absent(capsys):
+    warn_if_target_unavailable("secondaries", [])
+    err = capsys.readouterr().err
+    assert "secondaries" in err
+    assert "fall back to the primary" in err
+
+
+def test_no_warning_when_secondaries_are_available(capsys):
+    warn_if_target_unavailable("secondaries", ["mongodb://s1:27018/?directConnection=true"])
+    assert capsys.readouterr().err == ""
+
+
+def test_no_warning_for_the_primary_target(capsys):
+    warn_if_target_unavailable("primary", [])
     assert capsys.readouterr().err == ""

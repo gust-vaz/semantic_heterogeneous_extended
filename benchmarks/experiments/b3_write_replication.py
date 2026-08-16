@@ -5,7 +5,6 @@ across write concerns and node counts. The corpus is rebuilt per repetition
 because the workload mutates state.
 """
 
-import os
 import sys
 
 from benchmarks.bench_utils import effective_write_concern
@@ -33,8 +32,7 @@ def main(argv=None):
     args = runner.base_parser(EXPERIMENT).parse_args(argv)
     profile = get_profile(args.profile, clients=args.clients, records=args.records)
 
-    override = os.environ.get("BENCH_PRIMARY_URI")
-    primary = override or topology.primary_uri(args.deployment)
+    primary, _ = runner.resolve_endpoints(args.deployment)
     nodes = topology.node_count(args.deployment)
     mongo_version = topology.server_version(primary)
 

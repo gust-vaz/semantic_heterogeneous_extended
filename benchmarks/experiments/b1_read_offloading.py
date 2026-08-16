@@ -5,7 +5,6 @@ without moving the version chain off the primary? Workers are assigned nodes
 round-robin so reads genuinely fan out instead of piling onto one secondary.
 """
 
-import os
 import sys
 
 from benchmarks.harness import corpus as corpus_module
@@ -27,11 +26,7 @@ def main(argv=None):
     args = runner.base_parser(EXPERIMENT).parse_args(argv)
     profile = get_profile(args.profile, clients=args.clients, records=args.records)
 
-    # BENCH_PRIMARY_URI lets tests point at a host-reachable Mongo; in the
-    # runner container the topology hostnames are the real ones.
-    override = os.environ.get("BENCH_PRIMARY_URI")
-    primary = override or topology.primary_uri(args.deployment)
-    secondaries = [] if override else topology.secondary_uris(args.deployment)
+    primary, secondaries = runner.resolve_endpoints(args.deployment)
     mongo_version = topology.server_version(primary)
 
     out_path = results.result_path(args.out, EXPERIMENT, args.profile)
@@ -39,6 +34,7 @@ def main(argv=None):
 
     for read_target in cells(args.deployment):
         print(f"[{EXPERIMENT}] {args.deployment} / {read_target}", flush=True)
+        runner.warn_if_target_unavailable(read_target, secondaries)
         handle = corpus_module.build_corpus(
             args.corpus, primary_uri=primary, records=profile["records"],
             chain_length=CHAIN_LENGTH, operation_mode=OPERATION_MODE,
