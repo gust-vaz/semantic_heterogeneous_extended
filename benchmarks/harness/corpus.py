@@ -5,14 +5,20 @@ real DATASUS. Experiments never know which one they were given.
 """
 
 import json
+import os
 import random
+import shutil
+import tempfile
 import time
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 
 import pandas as pd
 from pymongo import MongoClient
 
 from benchmarks.database_generator import DatabaseGenerator
+from semantic_heterogeneous_database import BasicCollection
 
 QUERY_SET_SIZE = 50
 
@@ -79,3 +85,100 @@ def build_synthetic(primary_uri, records, chain_length, operation_mode,
         record_count=records,
         make_record=make_record,
     )
+
+
+DATASET_ROOT = os.path.join("dataset", "MellowDB_experiments")
+SOURCE_SUBDIR = "source_data"
+OPERATIONS_FILE = os.path.join("semantic_operations", "operations_cid9_cid10.csv")
+EVOLVING_FIELD = "cid"
+VALID_FROM_FIELD = "RefDate"
+
+
+def dataset_available(root=None):
+    root = root or DATASET_ROOT
+    return os.path.isdir(os.path.join(root, SOURCE_SUBDIR))
+
+
+def build_real(primary_uri, operation_mode, write_concern="majority",
+               max_files=None, dataset_root=None, seed=42):
+    """Load the DATASUS mortality corpus and apply the CID-9 -> CID-10 operations."""
+    root = dataset_root or DATASET_ROOT
+    source = os.path.join(root, SOURCE_SUBDIR)
+    if not os.path.isdir(source):
+        raise FileNotFoundError(
+            f"DATASUS dataset not found at '{source}'. "
+            "Provide the dataset or run with --corpus synthetic."
+        )
+
+    database_name = 'benchdb_' + uuid.uuid4().hex[:12]
+    collection_name = 'col_' + uuid.uuid4().hex[:12]
+    collection = BasicCollection(database_name, collection_name, primary_uri,
+                                 operation_mode, write_concern=write_concern)
+
+    # insert_many_by_csv ingests every CSV in a folder, so a capped run copies
+    # just the first N files into a scratch folder rather than the whole set.
+    staging = None
+    folder = source
+    if max_files is not None:
+        staging = tempfile.mkdtemp(prefix="bench_corpus_")
+        for name in sorted(os.listdir(source))[:max_files]:
+            if name.endswith(".csv"):
+                shutil.copy2(os.path.join(source, name), staging)
+        folder = staging
+
+    try:
+        start = time.time()
+        collection.insert_many_by_csv(folder, VALID_FROM_FIELD, '%Y-%m-%d', ',')
+        setup_insert_s = time.time() - start
+    finally:
+        if staging:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    start = time.time()
+    collection.execute_many_operations_by_csv(
+        os.path.join(root, OPERATIONS_FILE), 'type', 'valid_from')
+    setup_operations_s = time.time() - start
+
+    client = MongoClient(primary_uri)
+    raw = client[database_name][collection_name]
+    record_count = raw.count_documents({})
+
+    # Draw queries from the corpus's own values so they actually match records.
+    random.seed(seed)
+    values = raw.distinct(EVOLVING_FIELD)
+    sample = random.sample(values, min(QUERY_SET_SIZE, len(values)))
+    query_set = [{EVOLVING_FIELD: value} for value in sample]
+
+    def make_record():
+        record = {
+            EVOLVING_FIELD: random.choice(values) if values else "unknown",
+            "ocorrencias": random.randint(1, 1000),
+        }
+        return json.dumps(record, default=str), datetime(2010, 1, 1)
+
+    return CorpusHandle(
+        database_name=database_name,
+        collection_name=collection_name,
+        query_set=query_set,
+        setup_insert_s=setup_insert_s,
+        setup_operations_s=max(setup_operations_s, 1e-6),
+        record_count=record_count,
+        make_record=make_record,
+    )
+
+
+def build_corpus(kind, **kwargs):
+    """Dispatch to the requested corpus implementation.
+
+    Callers pass the union of both implementations' arguments so an experiment
+    never has to branch on the corpus kind; each branch drops the ones that do
+    not apply to it.
+    """
+    if kind == "synthetic":
+        kwargs.pop("max_files", None)
+        return build_synthetic(**kwargs)
+    if kind == "real":
+        kwargs.pop("records", None)
+        kwargs.pop("chain_length", None)
+        return build_real(**kwargs)
+    raise ValueError(f"Unknown corpus '{kind}'. Choose: synthetic, real")
