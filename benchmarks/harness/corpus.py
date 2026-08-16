@@ -38,10 +38,42 @@ def drop_corpus(primary_uri, handle):
     MongoClient(primary_uri).drop_database(handle.database_name)
 
 
+#: Worst case a single semantic operation burns 3 domain values (a merge takes
+#: two old values plus a new one), and every operation may land on the same
+#: field, so this many values per field guarantees generate_version() can always
+#: find an unused combination.
+DOMAIN_VALUES_PER_OPERATION = 4
+MIN_DOMAIN = 20
+
+
+def domain_for_chain(chain_length):
+    """Smallest field domain that can support `chain_length` semantic operations.
+
+    DatabaseGenerator refuses to evolve a value twice, so a domain that is too
+    small exhausts its pool of unused values and generate_version() recurses
+    until RecursionError.
+    """
+    return max(MIN_DOMAIN, DOMAIN_VALUES_PER_OPERATION * chain_length)
+
+
 def build_synthetic(primary_uri, records, chain_length, operation_mode,
-                    write_concern="majority", seed=42, fields=8, domain=20,
+                    write_concern="majority", seed=42, fields=8, domain=None,
                     evolution_fields=2):
-    """Fabricate a corpus with DatabaseGenerator and apply `chain_length` operations."""
+    """Fabricate a corpus with DatabaseGenerator and apply `chain_length` operations.
+
+    `domain` defaults to whatever this chain length needs. Sweeps that vary
+    chain_length should pass one explicit domain sized for their longest chain,
+    so query selectivity stays constant across the sweep.
+    """
+    if domain is None:
+        domain = domain_for_chain(chain_length)
+    required = domain_for_chain(chain_length)
+    if domain < required:
+        raise ValueError(
+            f"domain={domain} is too small for chain_length={chain_length}; "
+            f"DatabaseGenerator would exhaust its unused values. "
+            f"Use domain >= {required}."
+        )
     random.seed(seed)
     generator = DatabaseGenerator(host=primary_uri, write_concern=write_concern)
     generator.generate(
@@ -180,5 +212,6 @@ def build_corpus(kind, **kwargs):
     if kind == "real":
         kwargs.pop("records", None)
         kwargs.pop("chain_length", None)
+        kwargs.pop("domain", None)
         return build_real(**kwargs)
     raise ValueError(f"Unknown corpus '{kind}'. Choose: synthetic, real")

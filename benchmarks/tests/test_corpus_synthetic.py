@@ -1,8 +1,32 @@
 import json
 from datetime import datetime
 
+import pytest
 from pymongo import MongoClient
-from benchmarks.harness.corpus import build_synthetic
+from benchmarks.harness.corpus import build_synthetic, domain_for_chain
+
+
+def test_domain_grows_with_chain_length():
+    # DatabaseGenerator never reuses an evolved value, so a long chain needs a
+    # correspondingly large domain or generate_version() recurses forever.
+    assert domain_for_chain(1) == 20        # floor
+    assert domain_for_chain(50) == 200
+    assert domain_for_chain(25) < domain_for_chain(50)
+
+
+def test_too_small_a_domain_is_rejected_up_front(primary_uri):
+    with pytest.raises(ValueError) as exc:
+        build_synthetic(primary_uri, records=10, chain_length=50,
+                        operation_mode="preprocess", domain=20)
+    assert "domain" in str(exc.value)
+
+
+def test_a_long_chain_builds_without_exhausting_the_domain(primary_uri, cleanup_corpus):
+    # Regression: chain_length=50 with the old fixed domain of 20 raised
+    # RecursionError inside DatabaseGenerator.generate_version().
+    handle = cleanup_corpus(primary_uri, build_synthetic(
+        primary_uri, records=20, chain_length=50, operation_mode="preprocess"))
+    assert handle.record_count == 20
 
 
 def test_synthetic_corpus_inserts_the_requested_records(primary_uri, cleanup_corpus):
