@@ -121,6 +121,21 @@ services:
     networks:
       - mellow-rs5-net
 
+  runner:
+    build: ./docker/runner
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      MONGO_URI: "mongodb://mongo-primary:27017,mongo-secondary-1:27018,mongo-secondary-2:27019,mongo-secondary-3:27020,mongo-secondary-4:27021/?replicaSet=rs0"
+    volumes:
+      - .:/app
+    working_dir: /app
+    networks:
+      - mellow-rs5-net
+    profiles:
+      - run
+
 networks:
   mellow-rs5-net:
     driver: bridge
