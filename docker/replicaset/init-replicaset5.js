@@ -2,7 +2,23 @@
 // Run by the mongo-init one-shot container.
 var maxAttempts = 60;
 var attempt = 0;
-var initiated = false;
+
+// Re-running this script must be harmless: `runner` depends on mongo-init
+// completing successfully, so failing here would break every
+// `docker compose run runner` against an already-initialised replica set.
+function isInitiated() {
+  try {
+    rs.status();
+    return true;   // rs.status() only succeeds once the set is initiated
+  } catch (e) {
+    return false;  // NotYetInitialized (code 94), or not reachable yet
+  }
+}
+
+var initiated = isInitiated();
+if (initiated) {
+  print("Replica set already initialized. Skipping rs.initiate().");
+}
 
 while (attempt < maxAttempts && !initiated) {
   try {
@@ -19,6 +35,11 @@ while (attempt < maxAttempts && !initiated) {
     initiated = true;
     print("Replica set initiated successfully.");
   } catch (e) {
+    if (String(e.message).indexOf("already initialized") !== -1) {
+      print("Replica set already initialized. Continuing.");
+      initiated = true;
+      break;
+    }
     print("Attempt " + attempt + " failed: " + e.message + ". Retrying...");
     sleep(2000);
     attempt++;
