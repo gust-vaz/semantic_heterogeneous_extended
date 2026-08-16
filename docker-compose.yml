@@ -1,6 +1,9 @@
 services:
   mongodb:
-    image: mongo:8.0
+    # Pinned to match the replica-set compose files. The floating mongo:8.0 tag
+    # resolves to a patch release that refuses to start on Linux kernel 6.19+
+    # (SERVER-121912); 8.0.12 predates that check.
+    image: mongo:8.0.12
     restart: no
     command: mongod --bind_ip_all --wiredTigerCacheSizeGB 0.3
     ulimits:
