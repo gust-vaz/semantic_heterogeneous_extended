@@ -26,16 +26,18 @@ def base_parser(experiment):
 
 
 def resolve_endpoints(deployment):
-    """Return (primary_uri, secondary_uris) for this deployment.
+    """Return (write_uri, secondary_read_uris) for this deployment.
 
-    Inside the runner container the Compose service hostnames resolve, so
-    topology discovery is used. BENCH_PRIMARY_URI / BENCH_SECONDARY_URIS let a
-    host-side run (tests, manual probing) point at ports instead, since those
-    hostnames do not resolve outside the Compose network.
+    The write URI names the whole replica set so writes survive an election;
+    only the read URIs are pinned to individual nodes. Inside the runner
+    container the Compose service hostnames resolve, so those come from
+    topology. BENCH_PRIMARY_URI / BENCH_SECONDARY_URIS let a host-side run
+    (tests, manual probing) point at ports instead, since those hostnames do
+    not resolve outside the Compose network.
     """
     primary_override = os.environ.get("BENCH_PRIMARY_URI")
     if not primary_override:
-        return topology.primary_uri(deployment), topology.secondary_uris(deployment)
+        return topology.write_uri(deployment), topology.secondary_uris(deployment)
 
     raw = os.environ.get("BENCH_SECONDARY_URIS", "")
     secondaries = [uri.strip() for uri in raw.split(",") if uri.strip()]
