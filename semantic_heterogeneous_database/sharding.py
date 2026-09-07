@@ -50,3 +50,35 @@ class ShardKey:
 
     def __repr__(self):
         return f'ShardKey({self.pattern!r})'
+
+
+def is_mongos(client):
+    """True when this client is talking to a query router rather than a mongod."""
+    return client.admin.command('hello').get('msg') == 'isdbgrid'
+
+
+def describe(db, name):
+    """The shard key currently in effect for db.name, or None if unsharded.
+
+    Read from the sharding catalog rather than inferred, so a collection sharded
+    outside MellowDB is discovered rather than re-sharded.
+    """
+    entry = db.client['config'].collections.find_one(
+        {'_id': f'{db.name}.{name}', 'dropped': {'$ne': True}})
+    if entry is None:
+        return None
+    return ShardKey.parse(dict(entry['key']))
+
+
+def distribution(db, name):
+    """Document count per shard, or {} when the collection is not sharded.
+
+    Diagnostic, not a gate: MellowDB is schemaless, so a document missing the
+    shard key field lands under null and concentrates on one chunk. This makes
+    that visible to whoever is measuring instead of failing their write.
+    """
+    stats = db.command('collStats', name)
+    shards = stats.get('shards')
+    if not shards:
+        return {}
+    return {shard: info.get('count', 0) for shard, info in shards.items()}
