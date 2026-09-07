@@ -1,5 +1,4 @@
 import time
-import uuid
 import pandas as pd
 import numpy as np
 from pymongo import MongoClient, ASCENDING,DESCENDING
@@ -203,7 +202,8 @@ class Collection:
         match = {'$and': [
             {'_min_version_number': {'$lte': SpanVersion}},
             {'_max_version_number': {'$gt': SpanVersion}},
-            {FieldName: ValueFilter}
+            {FieldName: ValueFilter},
+            {FieldName: {'$ne': EvolvedValue}}
         ]}
 
         if Direction == 'forward':
@@ -213,22 +213,19 @@ class Collection:
             original_set = {'_min_version_number': BoundaryVersion}
             evolved_set = {'_max_version_number': BoundaryVersion, FieldName: EvolvedValue}
 
-        ## Copy the affected records to a temporary collection, bound the originals at the
-        ## boundary, evolve the copies, and merge them back ($out cannot target the processed
-        ## collection directly, and $merge with whenMatched=fail keeps this insert-only).
-        temporary_collection = str(uuid.uuid4())
-        self.collection_processed.aggregate([
+        ## Copy-and-evolve in one server-side pass. Unlike $out, $merge can target a
+        ## sharded collection and can target the collection being read, so there is no
+        ## temporary collection to funnel every affected record through the primary
+        ## shard. $unset of _id makes each copy a fresh insert, so whenMatched never
+        ## fires; the $ne clause keeps the scan from ever seeing those inserts.
+        ## No `on` is specified on purpose: the default needs no unique index.
+        self._col_processed_w.aggregate([
             {'$match': match},
             {'$unset': '_id'},
-            {'$out': temporary_collection}
-        ])
-        self.collection_processed.update_many(match, {'$set': original_set})
-        self.db[temporary_collection].update_many({}, {'$set': evolved_set})
-        self.db[temporary_collection].aggregate([
-            {'$match': {}},
+            {'$set': evolved_set},
             {'$merge': {'into': self.collection_processed.name, 'whenMatched': 'fail'}}
         ])
-        self.db[temporary_collection].drop()
+        self._col_processed_w.update_many(match, {'$set': original_set})
 
 
     def insert_one(self, JsonString, ValidFromDate:datetime):
