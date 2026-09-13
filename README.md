@@ -16,21 +16,22 @@ Two strategies are implemented and benchmarked:
 | **Preprocess** | Insertion time (eager) | Read-heavy workloads |
 | **Rewrite** | Query time (lazy) | Write-heavy workloads (≥ 95 % inserts) |
 
-The same Python API serves a single MongoDB node or a replica set — only the connection
-string changes.
+The same Python API serves a single MongoDB node, a replica set or a sharded cluster — only
+the connection string changes, plus an optional shard key when sharding.
 
 ---
 
-## Three ways to run
+## Four ways to run
 
-Pick the setup that matches what you want to do. All three run the exact same library and
-benchmarks; they differ only in how MongoDB is provided.
+Pick the setup that matches what you want to do. All four run the exact same library; they
+differ only in how MongoDB is provided. The benchmarks do not support sharded clusters yet.
 
 | # | Way to run | MongoDB provided by | Best for |
 |---|------------|---------------------|----------|
 | **1** | [Local](#1-local) | A MongoDB you install/run yourself | Library development, quick local runs |
 | **2** | [Single node via Docker Compose](#2-single-node-via-docker-compose) | One Docker container | Reproducible single-node benchmarks |
 | **3** | [Replica set via Docker Compose](#3-replica-set-via-docker-compose-3-or-5-nodes) | 3 or 5 Docker containers | Distributed experiments, failover, consistency |
+| **4** | [Sharded cluster via Docker Compose](#4-sharded-cluster-via-docker-compose-4-or-8-shards) | A config server, 4 or 8 shards and a router, in Docker | Partitioning, shard keys |
 
 All benchmark output goes to the git-ignored `results/` directory, so finished runs never
 clutter the repository.
@@ -181,6 +182,61 @@ docker compose -f docker-compose.replicaset.yml down -v    # delete all data
 
 ---
 
+## 4. Sharded cluster via Docker Compose (4 or 8 shards)
+
+Runs a sharded MongoDB cluster in Docker: one config server, four or eight shards and one
+`mongos` router. MellowDB only ever talks to the router, so it is the only service that
+publishes a host port.
+
+| Topology | Compose file | Services |
+|----------|--------------|----------|
+| 4 shards | `docker-compose.shard4.yml` | `cfg1`, `shard1`–`shard4`, `mongos` (host port `27017`) |
+| 8 shards | `docker-compose.shard8.yml` | `cfg1`, `shard1`–`shard8`, `mongos` (host port `27017`) |
+
+Each shard is a single-node replica set. That is deliberate: this deployment is for questions
+about partitioning, not replication, which the replica-set stacks above already cover. It
+also means there is no secondary to offload reads to, so `read_uri` / `read_mode` do not
+apply here.
+
+### Start the cluster
+
+```bash
+# 4 shards (use docker-compose.shard8.yml for 8)
+docker compose -f docker-compose.shard4.yml up -d
+docker compose -f docker-compose.shard4.yml wait mongo-init   # exits 0 once the cluster is ready
+```
+
+The one-shot `mongo-init` container initiates the config server and every shard, then
+registers the shards with the router. It is safe to re-run. Verify:
+
+```bash
+docker compose -f docker-compose.shard4.yml logs --no-log-prefix mongo-init | tail -1
+docker compose -f docker-compose.shard4.yml exec -T mongos \
+    mongosh --quiet --eval 'db.getSiblingDB("config").shards.countDocuments({})'
+```
+
+Expected: `Sharded cluster ready with 4 shards.` and `4`.
+
+Two environment variables adjust the stack without editing it:
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `MONGOS_HOST_PORT` | `27017` | Host port the router is published on |
+| `MONGO_CACHE_GB` | `0.25` | WiredTiger cache per `mongod` — the minimum, so 8 shards fit a laptop; raise it on a benchmark machine |
+
+Every stack in this repository publishes on `27017` by default, so run one at a time or move
+the router with `MONGOS_HOST_PORT`. If you adapt these files for another machine, keep the
+`nofile` ulimit: without it a shard runs out of file descriptors under load and aborts.
+
+### Stop the cluster
+
+```bash
+docker compose -f docker-compose.shard4.yml down       # keep data volumes
+docker compose -f docker-compose.shard4.yml down -v    # delete all data
+```
+
+---
+
 ## Running benchmarks
 
 The distributed extension raises questions the original single-node benchmarks could not
@@ -213,6 +269,10 @@ run the experiment in an in-network runner container → write the CSV → `comp
 | `b6` | How does query cost grow as semantic operations stack up (chain length 1→50)? | `single,rs3` |
 
 `./bench.sh all` runs `b1`, `b3`, `b6`, then `b4` (largest matrix last).
+
+> Sharded clusters are not part of any experiment yet. `bench.sh` and the experiment runner
+> refuse `sh4` / `sh8`, because every experiment assumes a single node or a replica set with
+> secondaries.
 
 ### Options
 
@@ -284,12 +344,19 @@ separately — nothing in this repository reads the CSVs back.
 MellowDB has two test suites:
 
 - **Unit tests** (`semantic_heterogeneous_database/tests/`) need only a running MongoDB —
-  single node or replica set. Topology is detected automatically.
+  single node, replica set or sharded cluster. Topology is detected automatically.
 - **Distributed tests** (`tests/distributed/`) additionally require a running replica set.
 
+A bare `uv run pytest` collects three directories — the library, the CLI and the benchmark
+harness — including `slow` tests that bring Docker stacks up. Pass a path, or `-m "not slow"`,
+to run less.
+
 ```bash
-# Unit tests (default pytest path)
-uv run pytest -v
+# Library unit tests
+uv run pytest semantic_heterogeneous_database/tests -v
+
+# Library, CLI and harness, without the slow Docker-driven tests
+uv run pytest -m "not slow" -v
 
 # Distributed tests — start a replica set first (way 3 above)
 uv run pytest tests/distributed/ -m "not slow" -v          # fast: correctness + concurrency
@@ -323,6 +390,34 @@ at the Compose service hostname, which resolves inside the network but not from 
 | `test_failover.py` | `slow` | Primary failure and election: data written before failover survives; new operations work after election |
 | `test_semantic_consistency_rate.py` | `slow` | Quantifies semantic correctness (F1) under combinations of write concern and version read concern; majority reads must yield 100 % F1 |
 
+### Running the tests against a sharded cluster
+
+Start a sharded cluster first (way 4 above). Two environment variables decide what runs:
+
+| Variable | Effect |
+|----------|--------|
+| `MELLOW_SHARD_KEY` | JSON shard key applied to every collection the suite builds, so the whole semantic suite runs sharded |
+| `MELLOW_SHARDED=1` | Enables the tests that only make sense on a cluster (placement, shard key lifecycle); they are skipped otherwise |
+
+```bash
+# The whole library suite, with every collection sharded on _id
+MONGO_HOST=mongodb://localhost:27017 MELLOW_SHARD_KEY='{"_id": "hashed"}' \
+    uv run pytest semantic_heterogeneous_database/tests -v
+
+# The cluster-only tests
+MELLOW_SHARDED=1 MONGO_HOST=mongodb://localhost:27017 \
+    uv run pytest semantic_heterogeneous_database/tests/test_sharding.py \
+                  semantic_heterogeneous_database/tests/test_split_materialization.py \
+                  semantic_heterogeneous_database/tests/test_sharded_placement.py -v
+```
+
+The Compose stacks themselves are tested by bringing each one up under its own project name
+and port, so a cluster you already have running is never touched:
+
+```bash
+uv run pytest benchmarks/tests/test_sharded_init.py -m slow -v
+```
+
 ---
 
 ## Operator CLI (`mellow_cli`)
@@ -352,14 +447,19 @@ uv run python -m mellow_cli destroy --deployment rs3 --db mortality --yes   # dr
 
 | Command | Effect |
 |---------|--------|
-| `up --deployment single\|rs3\|rs5` | compose up + wait + connect |
+| `up --deployment single\|rs3\|rs5\|sh4\|sh8` | compose up + wait + connect (on `sh4`/`sh8`, waits until every shard is registered) |
 | `connect` / `shell` | attach to a running deployment (no Docker touch) |
 | `load <folder> [date_field]` | bulk-load a folder of CSVs (REPL); one-shot: `load <folder> --date-field RefDate` |
 | `operations <file>` | apply a `;`-delimited operations CSV |
 | `query '<dict>'` / `count '<dict>'` | query (dict or single-quoted dict syntax) |
-| `read-node <port\|primary> [split\|single_source]` | switch the record-read node live |
+| `read-node <port\|primary> [split\|single_source]` | switch the record-read node live (replica sets only) |
 | `drop --yes` | drop the database, keep Docker running |
 | `destroy --yes` | drop the database **and** `docker compose down -v` |
+
+On `sh4` / `sh8` the CLI connects to the router on port `27017` (it does not read
+`MONGOS_HOST_PORT`) and has no shard key option: collections it creates are not sharded and
+live whole on the database's primary shard. A collection already sharded through the library
+is discovered and used as is.
 
 ---
 
@@ -410,6 +510,7 @@ semantic_heterogeneous_database/   # MellowDB library
   GroupingOperation.py             #   many-to-1 merge
   UngroupingOperation.py           #   1-to-many split
   SemanticOperation.py             #   abstract base class
+  sharding.py                      #   shard key, mongos detection, idempotent shardCollection, placement
   tests/                           #   unit tests (any MongoDB topology)
 
 bench.sh                           # benchmark entrypoint — needs only Docker + bash
@@ -429,7 +530,7 @@ benchmarks/                        # research scripts that use the library
     b4_strategy_distribution.py    #     B4 — strategy × distribution
     b6_chain_depth.py              #     B6 — version-chain depth
   simulations.py                   #   older single-node benchmark CLI
-  database_generator.py            #   synthetic record + operation generator
+  database_generator.py            #   synthetic records + operations (fields evo0.., f0..)
   bench_utils.py                   #   write-concern helpers
   tests/                           #   harness and experiment tests
   legacy/                          #   older experiments, pending rework
@@ -441,11 +542,14 @@ tests/distributed/                 # tests that require a replica set
 docker/
   runner/                          #   Python 3.12 runner image
   replicaset/                      #   rs.initiate() scripts (3- and 5-node, idempotent)
+  sharded/                         #   config server + shard init and addShard (idempotent)
 analysis/                          # scripts that generate the paper figures
 
 docker-compose.yml                 # way 2 — single node
 docker-compose.replicaset.yml      # way 3 — 3-node replica set
 docker-compose.replicaset5.yml     # way 3 — 5-node replica set
+docker-compose.shard4.yml          # way 4 — 4-shard cluster
+docker-compose.shard8.yml          # way 4 — 8-shard cluster
 pyproject.toml                     # dependencies and pytest configuration
 ```
 
@@ -524,4 +628,42 @@ col = BasicCollection(
 # Switch the read node / mode at runtime (e.g. point reads at a different secondary)
 col.set_read_source('mongodb://localhost:27019/?directConnection=true', read_mode='split')
 col.set_read_source(None)   # back to reading everything from the primary
+```
+
+### Sharded clusters
+
+Connect through the router and pass a `shard_key` — MongoDB's own key pattern, the same
+dictionary `shardCollection` takes:
+
+```python
+col = BasicCollection(
+    'mydb', 'mycollection',
+    mongo_uri='mongodb://localhost:27017',   # the mongos router
+    operation_mode='preprocess',
+    shard_key={'city': 'hashed'},            # or {'city': 1}, {'_id': 'hashed'}
+)
+```
+
+- **What gets sharded:** in `preprocess` mode, the raw collection and
+  `<collection>_processed`; in `rewrite` mode, the raw collection. The version chain and the
+  columns metadata are never sharded — they are small and stay whole on the database's
+  primary shard.
+- **Idempotent:** reopening a collection with the same key does nothing, and a different key
+  raises `MellowDBError` instead of re-sharding. With no `shard_key`, an existing shard key is
+  discovered and used.
+- **Off a cluster:** against a single node or a replica set the key is ignored with a
+  `RuntimeWarning`, so the same code runs everywhere.
+- **Schemaless:** a document may lack the shard key field. It is stored, and `preprocess`
+  still evolves it; its evolved copies are written back by the driver instead of `$merge`,
+  so more slowly.
+- **Ranged keys and small data:** a ranged key starts as a single chunk, so a small
+  collection stays on one shard; a hashed key spreads from the start.
+
+To see where the data actually is:
+
+```python
+from semantic_heterogeneous_database import sharding
+
+sharding.distribution(col.collection.db, 'mycollection_processed')
+# e.g. {'shard1': 122, 'shard2': 133, 'shard3': 138, 'shard4': 74}
 ```
