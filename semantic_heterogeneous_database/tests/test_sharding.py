@@ -97,7 +97,9 @@ def test_is_mongos_is_false_for_a_standalone():
 
 
 def test_describe_returns_none_for_an_unsharded_collection(make_collection):
-    col = make_collection('preprocess')
+    # shard_key=None explicitly: omitting it would inherit MELLOW_SHARD_KEY and
+    # shard the collection under a sharded run, which is not what this asserts.
+    col = make_collection('preprocess', shard_key=None)
     assert sharding.describe(col.collection.db, 'col') is None
 
 
