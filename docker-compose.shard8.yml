@@ -1,0 +1,165 @@
+# A sharded cluster: one config-server replica set, eight single-node shard
+# replica sets, one router. Only the router publishes a host port - it is the
+# only address MellowDB ever needs - and MONGOS_HOST_PORT moves it. Shards are
+# single-node on purpose: this deployment answers questions about partitioning,
+# not replication, which rs3/rs5 already cover.
+#
+# The WiredTiger cache defaults to its 0.25 GB minimum so sh8 fits a development
+# machine; a benchmark machine raises it with MONGO_CACHE_GB.
+x-mongo: &mongo
+  image: mongo:8.0.12
+  restart: unless-stopped
+  ulimits:
+    nofile:
+      soft: 64000
+      hard: 64000
+  networks:
+    - mellow-sh-net
+
+x-health: &health
+  interval: 5s
+  timeout: 5s
+  retries: 20
+
+services:
+  cfg1:
+    <<: *mongo
+    command: mongod --configsvr --replSet cfg --bind_ip_all --port 27019 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - cfg1-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27019", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  shard1:
+    <<: *mongo
+    command: mongod --shardsvr --replSet shard1 --bind_ip_all --port 27018 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - shard1-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27018", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  shard2:
+    <<: *mongo
+    command: mongod --shardsvr --replSet shard2 --bind_ip_all --port 27018 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - shard2-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27018", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  shard3:
+    <<: *mongo
+    command: mongod --shardsvr --replSet shard3 --bind_ip_all --port 27018 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - shard3-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27018", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  shard4:
+    <<: *mongo
+    command: mongod --shardsvr --replSet shard4 --bind_ip_all --port 27018 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - shard4-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27018", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  shard5:
+    <<: *mongo
+    command: mongod --shardsvr --replSet shard5 --bind_ip_all --port 27018 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - shard5-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27018", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  shard6:
+    <<: *mongo
+    command: mongod --shardsvr --replSet shard6 --bind_ip_all --port 27018 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - shard6-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27018", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  shard7:
+    <<: *mongo
+    command: mongod --shardsvr --replSet shard7 --bind_ip_all --port 27018 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - shard7-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27018", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  shard8:
+    <<: *mongo
+    command: mongod --shardsvr --replSet shard8 --bind_ip_all --port 27018 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - shard8-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27018", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  mongos:
+    <<: *mongo
+    command: mongos --configdb cfg/cfg1:27019 --bind_ip_all --port 27017
+    ports:
+      - "${MONGOS_HOST_PORT:-27017}:27017"
+    depends_on:
+      cfg1: { condition: service_healthy }
+      shard1: { condition: service_healthy }
+      shard2: { condition: service_healthy }
+      shard3: { condition: service_healthy }
+      shard4: { condition: service_healthy }
+      shard5: { condition: service_healthy }
+      shard6: { condition: service_healthy }
+      shard7: { condition: service_healthy }
+      shard8: { condition: service_healthy }
+
+  mongo-init:
+    image: mongo:8.0.12
+    restart: "no"
+    depends_on:
+      mongos:
+        condition: service_started
+    environment:
+      SHARD_COUNT: "8"
+    command: mongosh --nodb /docker-entrypoint-initdb.d/init-sharded.js
+    volumes:
+      - ./docker/sharded/init-sharded.js:/docker-entrypoint-initdb.d/init-sharded.js:ro
+    networks:
+      - mellow-sh-net
+
+  runner:
+    build: ./docker/runner
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      MONGO_URI: "mongodb://mongos:27017"
+      MONGO_HOST: "mongodb://mongos:27017"
+    volumes:
+      - .:/app
+    working_dir: /app
+    networks:
+      - mellow-sh-net
+    profiles:
+      - run
+
+networks:
+  mellow-sh-net:
+    driver: bridge
+
+volumes:
+  cfg1-data:
+  shard1-data:
+  shard2-data:
+  shard3-data:
+  shard4-data:
+  shard5-data:
+  shard6-data:
+  shard7-data:
+  shard8-data:
