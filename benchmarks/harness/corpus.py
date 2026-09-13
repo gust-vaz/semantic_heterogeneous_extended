@@ -74,9 +74,9 @@ def build_synthetic(primary_uri, records, chain_length, operation_mode,
             f"DatabaseGenerator would exhaust its unused values. "
             f"Use domain >= {required}."
         )
-    random.seed(seed)
+    rng = random.Random(seed)
     generator = DatabaseGenerator(host=primary_uri, write_concern=write_concern,
-                                  shard_key=shard_key)
+                                  shard_key=shard_key, rng=rng)
     generator.generate(
         number_of_records=records,
         number_of_versions=1,
@@ -100,8 +100,8 @@ def build_synthetic(primary_uri, records, chain_length, operation_mode,
 
     query_set = []
     for _ in range(QUERY_SET_SIZE):
-        field_name = random.choice(generator.fields)[0]
-        query_set.append({field_name: random.choice(generator.field_domain[field_name])})
+        field_name = rng.choice(generator.fields)[0]
+        query_set.append({field_name: rng.choice(generator.field_domain[field_name])})
 
     def make_record():
         record = generator.generate_record()
@@ -176,16 +176,17 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
     raw = client[database_name][collection_name]
     record_count = raw.count_documents({})
 
-    # Draw queries from the corpus's own values so they actually match records.
-    random.seed(seed)
+    # Draw queries from the corpus's own values so they actually match records, from a
+    # private generator: pymongo draws request ids from the global random module.
+    rng = random.Random(seed)
     values = raw.distinct(EVOLVING_FIELD)
-    sample = random.sample(values, min(QUERY_SET_SIZE, len(values)))
+    sample = rng.sample(values, min(QUERY_SET_SIZE, len(values)))
     query_set = [{EVOLVING_FIELD: value} for value in sample]
 
     def make_record():
         record = {
-            EVOLVING_FIELD: random.choice(values) if values else "unknown",
-            "ocorrencias": random.randint(1, 1000),
+            EVOLVING_FIELD: rng.choice(values) if values else "unknown",
+            "ocorrencias": rng.randint(1, 1000),
         }
         return json.dumps(record, default=str), datetime(2010, 1, 1)
 

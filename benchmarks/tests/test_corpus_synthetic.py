@@ -1,4 +1,5 @@
 import json
+import threading
 from datetime import datetime
 
 import pytest
@@ -82,13 +83,45 @@ def test_make_record_produces_insertable_pairs(primary_uri, cleanup_corpus):
     assert isinstance(valid_from, datetime)
 
 
-def test_same_seed_produces_the_same_query_set(primary_uri, cleanup_corpus):
-    first = cleanup_corpus(primary_uri, build_synthetic(
-        primary_uri, records=10, chain_length=0,
-        operation_mode="preprocess", seed=7))
-    second = cleanup_corpus(primary_uri, build_synthetic(
-        primary_uri, records=10, chain_length=0,
-        operation_mode="preprocess", seed=7))
+def _raw_records(primary_uri, handle):
+    raw = MongoClient(primary_uri)[handle.database_name][handle.collection_name]
+    return sorted(str(doc) for doc in raw.find({}, {"_id": 0}))
+
+
+def _registered_operations(primary_uri, handle):
+    # Version numbers are left out on purpose: SemanticOperation draws them from the
+    # global random module by design, and they were never part of a seeded corpus.
+    versions = MongoClient(primary_uri)[handle.database_name][handle.collection_name + "_versions"]
+    return sorted(str((doc["version_valid_from"], doc["previous_operation"]))
+                  for doc in versions.find({"previous_operation": {"$ne": None}}))
+
+
+def test_same_seed_produces_the_same_corpus_despite_concurrent_traffic(primary_uri, cleanup_corpus):
+    """pymongo draws request ids from the global random module - from the calling
+    thread and from its monitor threads alike - so any MongoDB traffic in the process
+    advances a globally seeded sequence. A seeded corpus must come out the same anyway,
+    or no run is reproducible."""
+    stop = threading.Event()
+
+    def chatter():
+        client = MongoClient(primary_uri)
+        while not stop.is_set():
+            client.admin.command("ping")
+
+    thread = threading.Thread(target=chatter, daemon=True)
+    thread.start()
+    try:
+        first = cleanup_corpus(primary_uri, build_synthetic(
+            primary_uri, records=10, chain_length=2,
+            operation_mode="preprocess", seed=7))
+        second = cleanup_corpus(primary_uri, build_synthetic(
+            primary_uri, records=10, chain_length=2,
+            operation_mode="preprocess", seed=7))
+    finally:
+        stop.set()
+        thread.join(timeout=5)
 
     assert first.query_set == second.query_set
+    assert _raw_records(primary_uri, first) == _raw_records(primary_uri, second)
+    assert _registered_operations(primary_uri, first) == _registered_operations(primary_uri, second)
     assert first.database_name != second.database_name

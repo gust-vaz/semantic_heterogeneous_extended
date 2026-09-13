@@ -13,7 +13,8 @@ class DatabaseGenerator:
     OPERATION_TYPE = ['merging', 'translation','splitting']
 
     def __init__(self, host='localhost', write_concern='majority',
-                 read_uri=None, read_mode='split', shard_key=None):
+                 read_uri=None, read_mode='split', shard_key=None, rng=None):
+        self.rng = rng if rng is not None else random
         self.host = host
         self.write_concern = write_concern
         self.read_uri = read_uri
@@ -29,13 +30,13 @@ class DatabaseGenerator:
 
         for i in range(number_of_values_in_domain):
             if field_type == 'datetime':
-                value = datetime.fromordinal(random.randint(365*2000, 365*2100)).strftime('%Y-%m-%d')
+                value = datetime.fromordinal(self.rng.randint(365*2000, 365*2100)).strftime('%Y-%m-%d')
             elif field_type == 'int':
-                value = random.randint(1,9999999)
+                value = self.rng.randint(1,9999999)
             elif field_type == 'float':
-                value = random.randint(1,9999999)/random.randint(1,9999999)
+                value = self.rng.randint(1,9999999)/self.rng.randint(1,9999999)
             elif field_type == 'string':
-                value = ''.join(random.choice(self.letters) for i in range(1,35))
+                value = ''.join(self.rng.choice(self.letters) for i in range(1,35))
             return_list.append(value)
 
         return return_list
@@ -46,9 +47,9 @@ class DatabaseGenerator:
         new_record = {}                
 
         for field in self.fields:
-            new_record[field[0]] = random.choice(self.field_domain[field[0]])            
+            new_record[field[0]] = self.rng.choice(self.field_domain[field[0]])            
         
-        new_record['valid_from_date']=datetime.fromordinal(random.randint(365*2000, 365*2100))
+        new_record['valid_from_date']=datetime.fromordinal(self.rng.randint(365*2000, 365*2100))
 
         self.records.append(new_record)  
         return new_record      
@@ -64,19 +65,19 @@ class DatabaseGenerator:
 
 
     def generate_version(self):
-        version_date = datetime.fromordinal(random.randint(365*2000, 365*2100))
-        operation_type = random.choice(DatabaseGenerator.OPERATION_TYPE)
+        version_date = datetime.fromordinal(self.rng.randint(365*2000, 365*2100))
+        operation_type = self.rng.choice(DatabaseGenerator.OPERATION_TYPE)
         arguments = None
 
          #float fields are not suitable for goruping nor translation
         if operation_type == 'translation':
-            fieldName = random.choice(self.evolution_fields)[0]
-            oldValue = random.choice(self.field_domain[fieldName])                        
+            fieldName = self.rng.choice(self.evolution_fields)[0]
+            oldValue = self.rng.choice(self.field_domain[fieldName])                        
             
             t = 0
             while not self.__check_evolution(fieldName, oldValue):                
                 t=t+1
-                oldValue = random.choice(self.field_domain[fieldName])
+                oldValue = self.rng.choice(self.field_domain[fieldName])
                 if t>30:
                     self.generate_version()##Ran into an infinite loop here. Just try to generate another combination
                     return
@@ -85,7 +86,7 @@ class DatabaseGenerator:
             newValue = oldValue                    
             while newValue == oldValue:
                 t=t+1
-                newValue = random.choice(self.field_domain[fieldName])
+                newValue = self.rng.choice(self.field_domain[fieldName])
                 if t>30:
                     self.generate_version()##Ran into an infinite loop here. Just try to generate another combination
                     return
@@ -93,7 +94,7 @@ class DatabaseGenerator:
                 t2 = 0
                 while not self.__check_evolution(fieldName, newValue):
                     t2 = t2+1                    
-                    newValue = random.choice(self.field_domain[fieldName])            
+                    newValue = self.rng.choice(self.field_domain[fieldName])            
                     if t2>30:
                         self.generate_version()
                         return
@@ -105,14 +106,14 @@ class DatabaseGenerator:
             }
             
         elif operation_type == 'merging':            
-            field = random.choice(self.evolution_fields) 
+            field = self.rng.choice(self.evolution_fields) 
             fieldName = field[0]
-            oldValues = [random.choice(self.field_domain[fieldName]), random.choice(self.field_domain[fieldName])]
+            oldValues = [self.rng.choice(self.field_domain[fieldName]), self.rng.choice(self.field_domain[fieldName])]
 
             t=0
             while not self.__check_evolution(fieldName, oldValues[0]):
                 t=t+1
-                oldValues[0] = random.choice(self.field_domain[fieldName])
+                oldValues[0] = self.rng.choice(self.field_domain[fieldName])
                 if t>30:
                     self.generate_version()
                     return
@@ -120,17 +121,17 @@ class DatabaseGenerator:
             t=0
             while not self.__check_evolution(fieldName, oldValues[1]):
                 t=t+1
-                oldValues[1] = random.choice(self.field_domain[fieldName])
+                oldValues[1] = self.rng.choice(self.field_domain[fieldName])
                 if t>30:
                     self.generate_version()
                     return
 
-            newValue = random.choice(self.field_domain[fieldName])         
+            newValue = self.rng.choice(self.field_domain[fieldName])         
 
             t=0
             while newValue in oldValues:
                 t=t+1
-                newValue = random.choice(self.field_domain[fieldName])
+                newValue = self.rng.choice(self.field_domain[fieldName])
                 if t>30:
                     self.generate_version()
                     return
@@ -138,7 +139,7 @@ class DatabaseGenerator:
                 t2=0
                 while not self.__check_evolution(fieldName, newValue):
                     t2=t2+1
-                    newValue = random.choice(self.field_domain[fieldName])       
+                    newValue = self.rng.choice(self.field_domain[fieldName])       
                     if t2>30:
                         self.generate_version()
                         return
@@ -150,24 +151,24 @@ class DatabaseGenerator:
             }
         
         elif operation_type == 'splitting':
-            field = random.choice(self.evolution_fields) 
+            field = self.rng.choice(self.evolution_fields) 
             fieldName = field[0]            
-            oldValue = random.choice(self.field_domain[fieldName])      
+            oldValue = self.rng.choice(self.field_domain[fieldName])      
 
             t=0
             while not self.__check_evolution(fieldName, oldValue):
                 t=t+1
-                oldValue = random.choice(self.field_domain[fieldName])
+                oldValue = self.rng.choice(self.field_domain[fieldName])
                 if t>30:
                     self.generate_version()
                     return
 
-            newValues = [random.choice(self.field_domain[fieldName]), random.choice(self.field_domain[fieldName])]
+            newValues = [self.rng.choice(self.field_domain[fieldName]), self.rng.choice(self.field_domain[fieldName])]
 
             t=0
             while not self.__check_evolution(fieldName, newValues[0]):
                 t=t+1
-                newValues[0] = random.choice(self.field_domain[fieldName])
+                newValues[0] = self.rng.choice(self.field_domain[fieldName])
                 if t>30:
                     self.generate_version()
                     return
@@ -175,7 +176,7 @@ class DatabaseGenerator:
             t=0
             while not self.__check_evolution(fieldName, newValues[1]):
                 t=t+1
-                newValues[1] = random.choice(self.field_domain[fieldName])
+                newValues[1] = self.rng.choice(self.field_domain[fieldName])
                 if t>30:
                     self.generate_version()
                     return
@@ -208,10 +209,10 @@ class DatabaseGenerator:
         for i in range(number_of_fields):
             if i < number_of_evolution_fields:
                 field_name = f'evo{i}'
-                field_type = random.choice([t for t in DatabaseGenerator.FIELD_TYPES if t != 'float'])
+                field_type = self.rng.choice([t for t in DatabaseGenerator.FIELD_TYPES if t != 'float'])
             else:
                 field_name = f'f{i - number_of_evolution_fields}'
-                field_type = random.choice(DatabaseGenerator.FIELD_TYPES)
+                field_type = self.rng.choice(DatabaseGenerator.FIELD_TYPES)
             self.fields.append((field_name, field_type))
             ##Generating fields domain of available values for each field.
             self.field_domain[field_name] = self.__generate_field_domain(field_type, number_of_values_in_domain)

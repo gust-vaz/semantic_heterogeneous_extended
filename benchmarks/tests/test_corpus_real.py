@@ -1,4 +1,7 @@
+import threading
+
 import pytest
+from pymongo import MongoClient
 from benchmarks.harness.corpus import (
     DATASET_ROOT, dataset_available, build_real, build_corpus,
 )
@@ -56,3 +59,47 @@ def test_real_corpus_loads_one_file_and_queries_match(primary_uri, cleanup_corpu
                                  primary_uri, "preprocess")
     matched = sum(collection.count_documents(q) for q in handle.query_set)
     assert matched > 0
+
+
+def _mini_dataset(root, distinct_causes=60):
+    """The DATASUS layout and headers at a size that loads in about a second: more
+    distinct causes than the 50-query sample, and no semantic operations."""
+    source = root / "source_data"
+    source.mkdir()
+    rows = ["UF,municipio,ano,RefDate,cid,ocorrencias"]
+    rows += [f"SC,GRAO PARA,1996,1996-12-31,{i:03d} CAUSA {i},1.0" for i in range(distinct_causes)]
+    (source / "mortalidade_mini_1996.csv").write_text("\n".join(rows) + "\n")
+    operations = root / "semantic_operations"
+    operations.mkdir()
+    (operations / "operations_cid9_cid10.csv").write_text("from;to;type;valid_from;field\n")
+    return str(root)
+
+
+def test_same_seed_produces_the_same_real_queries_despite_concurrent_traffic(
+        tmp_path, primary_uri, cleanup_corpus):
+    """The query sample and make_record draw from a seeded generator, and pymongo
+    advances the global one with every request it sends, from any thread."""
+    root = _mini_dataset(tmp_path)
+    stop = threading.Event()
+
+    def chatter():
+        client = MongoClient(primary_uri)
+        while not stop.is_set():
+            client.admin.command("ping")
+
+    thread = threading.Thread(target=chatter, daemon=True)
+    thread.start()
+    try:
+        first = cleanup_corpus(primary_uri, build_real(
+            primary_uri, operation_mode="preprocess", dataset_root=root, seed=7))
+        second = cleanup_corpus(primary_uri, build_real(
+            primary_uri, operation_mode="preprocess", dataset_root=root, seed=7))
+        first_records = [first.make_record() for _ in range(5)]
+        second_records = [second.make_record() for _ in range(5)]
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+
+    assert len(first.query_set) == 50
+    assert first.query_set == second.query_set
+    assert first_records == second_records
