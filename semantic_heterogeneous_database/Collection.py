@@ -8,6 +8,7 @@ from pymongo import ReadPreference
 from bson.objectid import ObjectId
 from datetime import datetime
 from .exceptions import MellowDBError
+from . import sharding
 import json
 import csv
 import re
@@ -18,7 +19,8 @@ class Collection:
              operation_mode='preprocess',
              write_concern='majority',
              read_uri=None,
-             read_mode='split'):
+             read_mode='split',
+             shard_key=None):
 
         if not isinstance(operation_mode, str) or operation_mode not in ['preprocess','rewrite']:
             raise MellowDBError('Operation Mode not recognized')
@@ -64,9 +66,19 @@ class Collection:
             fields = self.collection_columns.find({})
             self.fields = dict([(col['field_name'], (col['first_edit_version'], col['last_edit_version'])) for col in fields])
 
-            ## Loading semantic operations in memory       
+            ## Loading semantic operations in memory
             self.update_versions()
-        
+
+        ## Sharding is applied here, with the collections still empty, so MongoDB
+        ## builds the shard key index itself. _versions and _columns are left
+        ## unsharded on purpose: they are tiny and have two competing access
+        ## patterns (next_operation.* and previous_operation.*) that no single
+        ## shard key serves, so they stay whole on the database's primary shard.
+        self._is_sharded = sharding.is_mongos(self.client)
+        self._shard_key = sharding.ensure(self.db, self.collection_name, shard_key)
+        if operation_mode == 'preprocess':
+            sharding.ensure(self.db, self.collection_name + '_processed', shard_key)
+
         self.current_version = self._versions_r.find_one({"current_version":1})
         self.semantic_operations = {}
         

@@ -14,7 +14,8 @@ class BasicCollection:
                  operation_mode='preprocess',
                  write_concern='majority',
                  read_uri=None,
-                 read_mode='split'):
+                 read_mode='split',
+                 shard_key=None):
         if not isinstance(operation_mode, str) or operation_mode not in ['preprocess','rewrite']:
             raise MellowDBError('Operation Mode not recognized')
 
@@ -25,6 +26,7 @@ class BasicCollection:
         self.write_concern = write_concern
         self.read_uri = read_uri
         self.read_mode = read_mode
+        self.shard_key = shard_key
 
         self.initialize_collection()
 
@@ -32,7 +34,8 @@ class BasicCollection:
     def initialize_collection(self):
         self.collection = Collection(self.database_name, self.collection_name,
                                      self.mongo_uri, self.operation_mode,
-                                     self.write_concern, self.read_uri, self.read_mode)
+                                     self.write_concern, self.read_uri, self.read_mode,
+                                     self.shard_key)
 
         # Register operations with new names
         self.collection.register_operation('translation', TranslationOperation(self))

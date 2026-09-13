@@ -6,7 +6,7 @@ from datetime import datetime
 import pytest
 from pymongo import MongoClient
 
-from semantic_heterogeneous_database import sharding
+from semantic_heterogeneous_database import BasicCollection, sharding
 from semantic_heterogeneous_database.exceptions import MellowDBError
 from semantic_heterogeneous_database.sharding import ShardKey
 
@@ -188,3 +188,40 @@ def test_ensure_leaves_a_collection_unsharded_when_no_key_is_requested(scratch_d
     scratch_db.create_collection('col')
     assert sharding.ensure(scratch_db, 'col', None) is None
     assert sharding.describe(scratch_db, 'col') is None
+
+
+def test_collection_exposes_sharding_state(make_collection):
+    col = make_collection('preprocess')
+    assert isinstance(col.collection._is_sharded, bool)
+    assert col.collection._shard_key is None or isinstance(
+        col.collection._shard_key, ShardKey)
+
+
+def test_bad_shard_key_is_rejected_at_construction():
+    with pytest.raises(MellowDBError):
+        BasicCollection(f"mellowshard_{_uuid.uuid4().hex[:12]}", "col",
+                        MONGO_HOST, 'preprocess', shard_key={'a': 1, 'b': 1})
+
+
+@needs_sharding
+def test_preprocess_shards_both_raw_and_processed(scratch_db):
+    BasicCollection(scratch_db.name, "col", MONGO_HOST, 'preprocess',
+                    shard_key={'municipio': 'hashed'})
+    assert sharding.describe(scratch_db, 'col') == ShardKey('municipio', 'hashed')
+    assert sharding.describe(scratch_db, 'col_processed') == ShardKey('municipio', 'hashed')
+
+
+@needs_sharding
+def test_rewrite_shards_only_the_raw_collection(scratch_db):
+    BasicCollection(scratch_db.name, "col", MONGO_HOST, 'rewrite',
+                    shard_key={'municipio': 1})
+    assert sharding.describe(scratch_db, 'col') == ShardKey('municipio', 'ranged')
+    assert sharding.describe(scratch_db, 'col_processed') is None
+
+
+@needs_sharding
+def test_metadata_collections_are_never_sharded(scratch_db):
+    BasicCollection(scratch_db.name, "col", MONGO_HOST, 'preprocess',
+                    shard_key={'municipio': 'hashed'})
+    assert sharding.describe(scratch_db, 'col_versions') is None
+    assert sharding.describe(scratch_db, 'col_columns') is None
