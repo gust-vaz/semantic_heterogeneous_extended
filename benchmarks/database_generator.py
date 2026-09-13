@@ -13,11 +13,12 @@ class DatabaseGenerator:
     OPERATION_TYPE = ['merging', 'translation','splitting']
 
     def __init__(self, host='localhost', write_concern='majority',
-                 read_uri=None, read_mode='split'):
+                 read_uri=None, read_mode='split', shard_key=None):
         self.host = host
         self.write_concern = write_concern
         self.read_uri = read_uri
         self.read_mode = read_mode
+        self.shard_key = shard_key
         self.operations = list() ## List to store randomly generated operations
         self.records = list()
         self.versions_dates = list()
@@ -190,27 +191,37 @@ class DatabaseGenerator:
 
 
     def generate(self, number_of_records, number_of_versions, number_of_fields, number_of_values_in_domain, number_of_evolution_fields, operation_mode):
+        if number_of_evolution_fields > number_of_fields:
+            raise ValueError(f'number_of_evolution_fields={number_of_evolution_fields} '
+                             f'exceeds number_of_fields={number_of_fields}')
+
         ## Starting random database
         self.letters = string.ascii_lowercase
         self.database_name = 'benchdb_' + uuid.uuid4().hex[:12]
         self.collection_name = 'col_' + uuid.uuid4().hex[:12]
 
-        ##Generating fields present in the documents        
+        ##Field names are fixed rather than drawn, so a shard key can be named before the
+        ##corpus exists. The first number_of_evolution_fields are the ones semantic operations
+        ##touch; float fields are not suitable for merging and splitting.
         self.fields = list()
         self.field_domain = dict()
         for i in range(number_of_fields):
-            field_name = ''.join(random.choice(self.letters) for a in range(5))
-            field_type = random.choice(DatabaseGenerator.FIELD_TYPES)
+            if i < number_of_evolution_fields:
+                field_name = f'evo{i}'
+                field_type = random.choice([t for t in DatabaseGenerator.FIELD_TYPES if t != 'float'])
+            else:
+                field_name = f'f{i - number_of_evolution_fields}'
+                field_type = random.choice(DatabaseGenerator.FIELD_TYPES)
             self.fields.append((field_name, field_type))
-            ##Generating fields domain of available values for each field. 
+            ##Generating fields domain of available values for each field.
             self.field_domain[field_name] = self.__generate_field_domain(field_type, number_of_values_in_domain)
 
-        fieldsList = list(filter(lambda f: f[1] != 'float', self.fields)) # float fields are not suitable for merging and splitting
-        self.evolution_fields = [random.choice(fieldsList) for i in range(number_of_evolution_fields)]
-        
+        self.evolution_fields = self.fields[:number_of_evolution_fields]
+
         self.collection = BasicCollection(self.database_name, self.collection_name, self.host, operation_mode,
                                           write_concern=self.write_concern,
-                                          read_uri=self.read_uri, read_mode=self.read_mode)
+                                          read_uri=self.read_uri, read_mode=self.read_mode,
+                                          shard_key=self.shard_key)
 
         self.versions_dates.append(datetime(1700,1,1))
              
@@ -219,6 +230,12 @@ class DatabaseGenerator:
 
         for i in range(number_of_records):
             self.generate_record()        
+
+    def field_names(self):
+        return [name for name, _ in self.fields]
+
+    def evolution_field_names(self):
+        return [name for name, _ in self.evolution_fields]
 
     def destroy(self):
         self.collection.collection.client.drop_database(self.collection.collection.database_name)

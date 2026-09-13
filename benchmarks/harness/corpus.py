@@ -58,7 +58,7 @@ def domain_for_chain(chain_length):
 
 def build_synthetic(primary_uri, records, chain_length, operation_mode,
                     write_concern="majority", seed=42, fields=8, domain=None,
-                    evolution_fields=2):
+                    evolution_fields=2, shard_key=None):
     """Fabricate a corpus with DatabaseGenerator and apply `chain_length` operations.
 
     `domain` defaults to whatever this chain length needs. Sweeps that vary
@@ -75,7 +75,8 @@ def build_synthetic(primary_uri, records, chain_length, operation_mode,
             f"Use domain >= {required}."
         )
     random.seed(seed)
-    generator = DatabaseGenerator(host=primary_uri, write_concern=write_concern)
+    generator = DatabaseGenerator(host=primary_uri, write_concern=write_concern,
+                                  shard_key=shard_key)
     generator.generate(
         number_of_records=records,
         number_of_versions=1,

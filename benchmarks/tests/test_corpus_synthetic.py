@@ -4,6 +4,7 @@ from datetime import datetime
 import pytest
 from pymongo import MongoClient
 from benchmarks.harness.corpus import build_synthetic, domain_for_chain
+from semantic_heterogeneous_database import sharding
 
 
 def test_domain_grows_with_chain_length():
@@ -12,6 +13,17 @@ def test_domain_grows_with_chain_length():
     assert domain_for_chain(1) == 20        # floor
     assert domain_for_chain(50) == 200
     assert domain_for_chain(25) < domain_for_chain(50)
+
+
+def test_build_synthetic_hands_the_shard_key_to_the_library(primary_uri, cleanup_corpus):
+    # Off a cluster the library warns that it ignored the key; that warning proves
+    # the key travelled from the corpus builder all the way into MellowDB.
+    if sharding.is_mongos(MongoClient(primary_uri)):
+        pytest.skip("asserts the off-cluster warning")
+    with pytest.warns(RuntimeWarning, match="evo0"):
+        handle = build_synthetic(primary_uri, records=5, chain_length=1,
+                                 operation_mode="preprocess", shard_key={"evo0": "hashed"})
+    cleanup_corpus(primary_uri, handle)
 
 
 def test_too_small_a_domain_is_rejected_up_front(primary_uri):
