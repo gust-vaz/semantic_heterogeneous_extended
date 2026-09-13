@@ -14,6 +14,9 @@ import csv
 import re
 
 class Collection:
+    #: Records lacking the shard key field are split through the driver, this many at a time.
+    _CLIENT_SPLIT_BATCH = 1000
+
     def __init__(self, DatabaseName, CollectionName,
              mongo_uri='mongodb://localhost:27017',
              operation_mode='preprocess',
@@ -76,8 +79,10 @@ class Collection:
         ## shard key serves, so they stay whole on the database's primary shard.
         self._is_sharded = sharding.is_mongos(self.client)
         self._shard_key = sharding.ensure(self.db, self.collection_name, shard_key)
+        self._processed_shard_key = None
         if operation_mode == 'preprocess':
-            sharding.ensure(self.db, self.collection_name + '_processed', shard_key)
+            self._processed_shard_key = sharding.ensure(
+                self.db, self.collection_name + '_processed', shard_key)
 
         self.current_version = self._versions_r.find_one({"current_version":1})
         self.semantic_operations = {}
@@ -231,12 +236,32 @@ class Collection:
         ## shard. $unset of _id makes each copy a fresh insert, so whenMatched never
         ## fires; the $ne clause keeps the scan from ever seeing those inserts.
         ## No `on` is specified on purpose: the default needs no unique index.
-        self._col_processed_w.aggregate([
-            {'$match': match},
-            {'$unset': '_id'},
-            {'$set': evolved_set},
-            {'$merge': {'into': self.collection_processed.name, 'whenMatched': 'fail'}}
-        ])
+        def evolved_copies(filter_):
+            return [{'$match': filter_}, {'$unset': '_id'}, {'$set': evolved_set}]
+
+        merge_back = {'$merge': {'into': self.collection_processed.name, 'whenMatched': 'fail'}}
+
+        key = self._processed_shard_key
+        if key is None:
+            self._col_processed_w.aggregate(evolved_copies(match) + [merge_back])
+        else:
+            ## On a sharded collection $merge refuses any record missing the shard key
+            ## field (Location51132), and only after the other shards have written their
+            ## copies. Inserting such a record is accepted, so the records without the
+            ## field - all under null, on one chunk - go through the same pipeline and
+            ## are written back by the driver instead.
+            self._col_processed_w.aggregate(
+                evolved_copies({'$and': [match, {key.field: {'$ne': None}}]}) + [merge_back])
+            batch = []
+            for copy in self._col_processed_w.aggregate(
+                    evolved_copies({'$and': [match, {key.field: None}]})):
+                batch.append(copy)
+                if len(batch) == self._CLIENT_SPLIT_BATCH:
+                    self._col_processed_w.insert_many(batch)
+                    batch = []
+            if batch:
+                self._col_processed_w.insert_many(batch)
+
         self._col_processed_w.update_many(match, {'$set': original_set})
 
 
