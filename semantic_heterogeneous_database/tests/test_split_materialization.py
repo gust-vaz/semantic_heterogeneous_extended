@@ -11,12 +11,39 @@ import re
 from datetime import datetime
 
 import pytest
+from pymongo import monitoring
 
 UUID_NAMED = re.compile(r'^[0-9a-f]{8}-[0-9a-f]{4}-')
 
 needs_sharding = pytest.mark.skipif(
     not os.environ.get("MELLOW_SHARDED"),
     reason="needs a mongos; set MELLOW_SHARDED=1 and point MONGO_HOST at it")
+
+
+class _CommandRecorder(monitoring.CommandListener):
+    """Records every command sent while `recording` is on.
+
+    Registered globally at import, before any collection builds its client, because
+    MellowDB creates its MongoClient internally and offers no hook for listeners.
+    """
+
+    def __init__(self):
+        self.recording = False
+        self.commands = []
+
+    def started(self, event):
+        if self.recording:
+            self.commands.append((event.command_name, event.command))
+
+    def succeeded(self, event):
+        pass
+
+    def failed(self, event):
+        pass
+
+
+_RECORDER = _CommandRecorder()
+monitoring.register(_RECORDER)
 
 
 @needs_sharding
@@ -54,16 +81,28 @@ def test_records_missing_the_shard_key_field_are_still_split(make_collection):
     assert processed.count_documents({}) == 17
 
 
-def test_split_leaves_no_temporary_collection(make_collection):
+def test_split_never_emits_out_or_names_a_temporary_collection(make_collection):
+    """The funnel this work removes lived in the commands, not in the end state: the
+    old implementation created a UUID-named collection with $out and dropped it again,
+    so nothing inspected after the operation could tell. Watch what is sent instead."""
     col = make_collection('preprocess')
     col.insert_one(json.dumps({'municipio': 'Grao Para', 'ocorrencias': 1}),
                    datetime(1984, 1, 1))
 
-    col.execute_operation('translation', datetime(1996, 1, 1), {
-        'fieldName': 'municipio', 'oldValue': 'Grao Para', 'newValue': 'Grao-Para'})
+    _RECORDER.commands.clear()
+    _RECORDER.recording = True
+    try:
+        col.execute_operation('translation', datetime(1996, 1, 1), {
+            'fieldName': 'municipio', 'oldValue': 'Grao Para', 'newValue': 'Grao-Para'})
+    finally:
+        _RECORDER.recording = False
 
-    names = col.collection.db.list_collection_names()
-    assert [n for n in names if UUID_NAMED.match(n)] == []
+    stages = [next(iter(stage)) for name, command in _RECORDER.commands
+              if name == 'aggregate' for stage in command['pipeline']]
+    assert '$merge' in stages, "no $merge recorded: the recorder saw nothing, nothing is proven"
+    assert '$out' not in stages
+    targets = [str(command.get(name)) for name, command in _RECORDER.commands]
+    assert [t for t in targets if UUID_NAMED.match(t)] == []
 
 
 def test_split_does_not_reprocess_its_own_output(make_collection):
