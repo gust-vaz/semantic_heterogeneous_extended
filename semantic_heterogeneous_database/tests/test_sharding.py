@@ -1,10 +1,29 @@
+import os
+import uuid as _uuid
+import warnings
 from datetime import datetime
 
 import pytest
+from pymongo import MongoClient
 
 from semantic_heterogeneous_database import sharding
 from semantic_heterogeneous_database.exceptions import MellowDBError
 from semantic_heterogeneous_database.sharding import ShardKey
+
+MONGO_HOST = os.environ.get(
+    "MONGO_HOST", "mongodb://localhost:27017/?directConnection=true")
+
+needs_sharding = pytest.mark.skipif(
+    not os.environ.get("MELLOW_SHARDED"),
+    reason="needs a mongos; set MELLOW_SHARDED=1 and point MONGO_HOST at it")
+
+
+@pytest.fixture
+def scratch_db():
+    client = MongoClient(MONGO_HOST)
+    db = client[f"mellowshard_{_uuid.uuid4().hex[:12]}"]
+    yield db
+    client.drop_database(db.name)
 
 
 def test_parse_accepts_mongodb_key_patterns():
@@ -82,9 +101,90 @@ def test_describe_returns_none_for_an_unsharded_collection(make_collection):
     assert sharding.describe(col.collection.db, 'col') is None
 
 
-def test_distribution_is_empty_for_an_unsharded_collection(make_collection):
+def test_distribution_is_empty_off_a_cluster(make_collection):
     col = make_collection('preprocess')
+    if sharding.is_mongos(col.collection.client):
+        pytest.skip("this assertion is about deployments with no shards")
     col.insert_one('{"municipio": "Grao Para"}', datetime(1984, 1, 1))
     # collStats reports no `shards` key at all off a cluster; the caller gets {}
     # rather than an exception, so measurement code needs no special case.
     assert sharding.distribution(col.collection.db, 'col_processed') == {}
+
+
+@needs_sharding
+def test_distribution_names_the_owning_shard_of_an_unsharded_collection(scratch_db):
+    """On a cluster, an unsharded collection is not invisible to collStats: it
+    reports the one shard holding all of it. That is how the primary-shard funnel
+    becomes measurable rather than inferred.
+
+    Built directly rather than through make_collection so no environment-level
+    shard key can be applied behind this assertion's back.
+    """
+    scratch_db.col.insert_many([{'municipio': 'Grao Para'} for _ in range(5)])
+    placement = sharding.distribution(scratch_db, 'col')
+    assert len(placement) == 1
+    assert sum(placement.values()) == 5
+
+
+def test_ensure_is_a_noop_and_warns_when_not_sharded(scratch_db):
+    if sharding.is_mongos(scratch_db.client):
+        pytest.skip("this assertion is about non-sharded deployments")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert sharding.ensure(scratch_db, 'col', {'municipio': 1}) is None
+    assert any('not a mongos' in str(w.message) for w in caught)
+
+
+def test_ensure_is_silent_when_no_key_is_requested(scratch_db):
+    if sharding.is_mongos(scratch_db.client):
+        pytest.skip("this assertion is about non-sharded deployments")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert sharding.ensure(scratch_db, 'col', None) is None
+    assert caught == []
+
+
+@needs_sharding
+def test_ensure_shards_an_empty_collection(scratch_db):
+    scratch_db.create_collection('col')
+    key = sharding.ensure(scratch_db, 'col', {'municipio': 'hashed'})
+    assert key == ShardKey('municipio', 'hashed')
+    assert sharding.describe(scratch_db, 'col') == key
+
+
+@needs_sharding
+def test_ensure_shards_a_populated_collection(scratch_db):
+    scratch_db.col.insert_many([{'municipio': f'm{i}'} for i in range(100)])
+    key = sharding.ensure(scratch_db, 'col', {'municipio': 1})
+    assert sharding.describe(scratch_db, 'col') == key
+
+
+@needs_sharding
+def test_ensure_is_idempotent(scratch_db):
+    scratch_db.create_collection('col')
+    first = sharding.ensure(scratch_db, 'col', {'municipio': 1})
+    second = sharding.ensure(scratch_db, 'col', {'municipio': 1})
+    assert first == second
+
+
+@needs_sharding
+def test_ensure_refuses_to_change_an_existing_shard_key(scratch_db):
+    scratch_db.create_collection('col')
+    sharding.ensure(scratch_db, 'col', {'municipio': 1})
+    with pytest.raises(MellowDBError) as exc:
+        sharding.ensure(scratch_db, 'col', {'cid': 'hashed'})
+    assert 'already sharded' in str(exc.value)
+
+
+@needs_sharding
+def test_ensure_discovers_an_existing_key_when_none_is_requested(scratch_db):
+    scratch_db.create_collection('col')
+    sharding.ensure(scratch_db, 'col', {'municipio': 'hashed'})
+    assert sharding.ensure(scratch_db, 'col', None) == ShardKey('municipio', 'hashed')
+
+
+@needs_sharding
+def test_ensure_leaves_a_collection_unsharded_when_no_key_is_requested(scratch_db):
+    scratch_db.create_collection('col')
+    assert sharding.ensure(scratch_db, 'col', None) is None
+    assert sharding.describe(scratch_db, 'col') is None

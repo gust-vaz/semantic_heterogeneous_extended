@@ -5,6 +5,8 @@ already large. The vocabulary is MongoDB's own: a shard key is written as the
 key pattern that shardCollection takes, e.g. {'municipio': 'hashed'}.
 """
 
+import warnings
+
 from .exceptions import MellowDBError
 
 
@@ -71,7 +73,12 @@ def describe(db, name):
 
 
 def distribution(db, name):
-    """Document count per shard, or {} when the collection is not sharded.
+    """Document count per shard.
+
+    Empty only when the deployment has no shards at all - a standalone mongod or
+    a plain replica set. On a cluster an *unsharded* collection still reports one
+    entry: the primary shard that owns the whole of it. That is not a quirk to
+    paper over, it is the most direct way to see the funnel this work removes.
 
     Diagnostic, not a gate: MellowDB is schemaless, so a document missing the
     shard key field lands under null and concentrates on one chunk. This makes
@@ -82,3 +89,45 @@ def distribution(db, name):
     if not shards:
         return {}
     return {shard: info.get('count', 0) for shard, info in shards.items()}
+
+
+def ensure(db, name, shard_key):
+    """Bring db.name to the requested shard key, idempotently.
+
+    Returns the ShardKey in effect, or None when the deployment is not sharded or
+    no key was requested and none exists. Never re-shards: a collection already
+    sharded on a different key is an error, not something to silently accept.
+    """
+    requested = ShardKey.parse(shard_key)
+
+    if not is_mongos(db.client):
+        if requested is not None:
+            warnings.warn(
+                f"shard_key={requested.pattern} ignored: this deployment is "
+                f"not a mongos", RuntimeWarning, stacklevel=2)
+        return None
+
+    current = describe(db, name)
+    if current is not None:
+        if requested is not None and requested != current:
+            raise MellowDBError(
+                f"{db.name}.{name} is already sharded on {current.pattern}; "
+                f"refusing to re-shard to {requested.pattern}. Drop the "
+                f"collection, or reshard it outside MellowDB.")
+        return current
+
+    if requested is None:
+        return None
+
+    db.client.admin.command('enableSharding', db.name)
+
+    ## An empty collection gets its shard key index created by shardCollection.
+    ## A populated one does not: it fails with InvalidOptions (72) unless the
+    ## index already exists, so build it first.
+    if (name in db.list_collection_names()
+            and db[name].estimated_document_count() > 0):
+        db[name].create_index(list(requested.pattern.items()))
+
+    db.client.admin.command(
+        'shardCollection', f'{db.name}.{name}', key=requested.pattern)
+    return requested
