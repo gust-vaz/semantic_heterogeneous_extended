@@ -33,6 +33,16 @@ def test_replica_sets_add_the_secondary_targets():
     assert read_targets_for("rs3") == ["primary", "secondaries", "secondaries_single_source"]
 
 
+@pytest.mark.parametrize("name", ["sh4", "sh8"])
+def test_experiments_refuse_sharded_deployments(name):
+    # Experiments read node_count == 1 as "standalone" and anything else as a
+    # replica set with secondaries. A sharded stack is neither: it would get
+    # secondary read targets with no node behind them, and rows recording
+    # nodes=0. Until an experiment supports sharding, refusing is the honest answer.
+    with pytest.raises(SystemExit):
+        base_parser("b1").parse_args(["--deployment", name])
+
+
 def test_primary_target_leaves_read_uri_unset():
     specs = client_specs(3, "primary", "split", "preprocess", "majority",
                          PRIMARY, SECONDARIES)

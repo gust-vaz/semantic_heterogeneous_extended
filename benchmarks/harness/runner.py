@@ -13,7 +13,12 @@ READ_TARGETS = ["primary", "secondaries", "secondaries_single_source"]
 
 def base_parser(experiment):
     parser = argparse.ArgumentParser(prog=f"benchmarks.experiments.{experiment}")
-    parser.add_argument("--deployment", required=True, choices=sorted(topology.DEPLOYMENTS))
+    # Experiments treat node_count == 1 as a standalone and anything else as a
+    # replica set with secondaries. A sharded cluster is neither, so it is not
+    # offered until an experiment supports one.
+    parser.add_argument("--deployment", required=True,
+                        choices=sorted(name for name in topology.DEPLOYMENTS
+                                       if not topology.is_sharded(name)))
     parser.add_argument("--profile", default=DEFAULT_PROFILE, choices=sorted(PROFILES))
     parser.add_argument("--corpus", default="synthetic", choices=["synthetic", "real"])
     parser.add_argument("--out", default="results",

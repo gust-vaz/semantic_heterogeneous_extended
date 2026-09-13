@@ -6,39 +6,14 @@ resolves it - YAML anchors merged, variables substituted. That is what catches a
 anchor that looks like it applies to a service and does not. The slow test brings
 a stack up and checks the cluster it produces.
 """
-import json
 import os
-import shutil
 import subprocess
 
 import pytest
 
+from benchmarks.tests.compose_config import command, needs_docker, resolved
+
 COMPOSES = {"docker-compose.shard4.yml": 4, "docker-compose.shard8.yml": 8}
-
-needs_docker = pytest.mark.skipif(
-    shutil.which("docker") is None, reason="docker not available"
-)
-
-
-def resolved(compose, **env):
-    """Services of `compose` as Compose resolves them, under exactly `env`.
-
-    Variables the stack reads are removed from the inherited environment first, so
-    a value exported in the developer's shell cannot leak into a default-value test.
-    """
-    base = {k: v for k, v in os.environ.items()
-            if k not in ("MONGO_CACHE_GB", "MONGOS_HOST_PORT")}
-    base.update({k: v for k, v in env.items() if v is not None})
-    out = subprocess.run(
-        ["docker", "compose", "-f", compose, "config", "--format", "json"],
-        capture_output=True, text=True, timeout=60, env=base)
-    assert out.returncode == 0, out.stderr
-    return json.loads(out.stdout)["services"]
-
-
-def command(service):
-    cmd = service.get("command") or ""
-    return " ".join(cmd) if isinstance(cmd, list) else cmd
 
 
 @needs_docker

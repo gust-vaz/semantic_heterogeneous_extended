@@ -4,6 +4,7 @@ from pymongo.topology_description import TOPOLOGY_TYPE
 from pymongo.uri_parser import parse_uri
 
 from benchmarks.harness import topology
+from benchmarks.tests.compose_config import command, needs_docker, resolved
 
 
 class FakeAdmin:
@@ -151,3 +152,59 @@ def test_rs5_compose_defines_a_runner_service():
     assert "build: ./docker/runner" in text
     assert "working_dir: /app" in text
     assert "mellow-rs5-net" in text
+
+
+SHARDED = {"sh4": 4, "sh8": 8}
+
+
+class _NoProbing:
+    """A client factory that fails the test if anything tries to connect."""
+
+    def __init__(self, *args, **kwargs):
+        raise AssertionError("a sharded deployment must not be probed for a primary")
+
+
+def test_only_the_sharded_deployments_are_sharded():
+    assert all(topology.is_sharded(name) for name in SHARDED)
+    assert not any(topology.is_sharded(name) for name in ("single", "rs3", "rs5"))
+
+
+@pytest.mark.parametrize("name", SHARDED)
+def test_sharded_write_uri_names_only_the_router(name):
+    # No replicaSet: the router is not a set member. No directConnection: the
+    # driver must be free to discover it is talking to a router.
+    uri = topology.write_uri(name)
+    parsed = parse_uri(uri)
+    assert parsed["nodelist"] == [("mongos", 27017)]
+    assert "replicaset" not in parsed["options"]
+    assert "directconnection" not in parsed["options"]
+    assert topology_type_of(uri) != TOPOLOGY_TYPE.Single
+
+
+@pytest.mark.parametrize("name", SHARDED)
+def test_sharded_deployments_have_no_node_to_offload_reads_to(name):
+    # Single-node shards have no secondary, so B1-style read offloading has
+    # nowhere to send a read. [] is the honest answer, reached without probing.
+    assert topology.secondary_uris(name, client_factory=_NoProbing) == []
+    assert topology.all_node_uris(name) == []
+
+
+def test_current_primary_is_refused_for_a_sharded_cluster():
+    with pytest.raises(ValueError) as exc:
+        topology.current_primary("sh8", client_factory=_NoProbing)
+    assert "sharded" in str(exc.value)
+
+
+@needs_docker
+@pytest.mark.parametrize("name,shards", SHARDED.items())
+def test_topology_map_agrees_with_the_stack_it_names(name, shards):
+    """The map and the compose file describe one cluster twice. Drift between them
+    sends the harness to an address the stack does not serve, or reports a shard
+    count the stack does not have."""
+    services = resolved(topology.compose_file(name), profiles=("run",))
+    assert topology.shard_count(name) == shards
+    assert sum("--shardsvr" in command(s) for s in services.values()) == shards
+    host, port = parse_uri(topology.write_uri(name))["nodelist"][0]
+    assert command(services[host]).startswith("mongos ")
+    assert f"--port {port}" in command(services[host])
+    assert services["runner"]["environment"]["MONGO_URI"] == topology.write_uri(name)

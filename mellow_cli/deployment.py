@@ -10,6 +10,8 @@ DEPLOYMENTS = {
     "rs3": {"compose": "docker-compose.replicaset.yml", "ports": [27017, 27018, 27019]},
     "rs5": {"compose": "docker-compose.replicaset5.yml",
             "ports": [27017, 27018, 27019, 27020, 27021]},
+    "sh4": {"compose": "docker-compose.shard4.yml", "ports": [27017], "shards": 4},
+    "sh8": {"compose": "docker-compose.shard8.yml", "ports": [27017], "shards": 8},
 }
 
 
@@ -42,7 +44,7 @@ class Deployment:
             self.wait_until_ready(timeout=timeout)
 
     def primary_uri(self, client_factory=MongoClient):
-        if self.name == "single":
+        if self.name == "single" or self.config.get("shards"):
             return node_uri(self.config["ports"][0])
         seed = node_uri(self.config["ports"][0])
         client = client_factory(seed, serverSelectionTimeoutMS=3000)
@@ -51,12 +53,19 @@ class Deployment:
 
     def wait_until_ready(self, timeout=90, client_factory=MongoClient):
         seed = node_uri(self.config["ports"][0])
+        shards = self.config.get("shards")
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
                 client = client_factory(seed, serverSelectionTimeoutMS=2000)
                 hello = client.admin.command("hello")
-                if self.name == "single" or hello.get("isWritablePrimary") or hello.get("primary"):
+                if shards:
+                    # A router already answers isWritablePrimary once the config
+                    # server has a primary, before any shard is registered, so a
+                    # sharded cluster is ready only when every shard is.
+                    if client["config"].shards.count_documents({}) >= shards:
+                        return
+                elif self.name == "single" or hello.get("isWritablePrimary") or hello.get("primary"):
                     return
             except Exception:
                 pass

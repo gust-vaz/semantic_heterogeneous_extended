@@ -40,6 +40,20 @@ DEPLOYMENTS = {
                   ("mongo-secondary-3", 27020),
                   ("mongo-secondary-4", 27021)],
     },
+    "sh4": {
+        "compose": "docker-compose.shard4.yml",
+        "replica_set": None,
+        "nodes": [],
+        "router": ("mongos", 27017),
+        "shards": 4,
+    },
+    "sh8": {
+        "compose": "docker-compose.shard8.yml",
+        "replica_set": None,
+        "nodes": [],
+        "router": ("mongos", 27017),
+        "shards": 8,
+    },
 }
 
 
@@ -68,6 +82,16 @@ def node_count(name):
     return len(_config(name)["nodes"])
 
 
+def is_sharded(name):
+    """True for a sharded cluster, where the address is a router, not a node."""
+    return "router" in _config(name)
+
+
+def shard_count(name):
+    """How many shards this deployment has. 0 for a non-sharded deployment."""
+    return _config(name).get("shards", 0)
+
+
 def all_node_uris(name):
     return [node_uri(host, port) for host, port in _config(name)["nodes"]]
 
@@ -77,9 +101,14 @@ def write_uri(name):
 
     Deliberately built from static config rather than discovery - the point is
     that this URI stays correct across a step-down, so there is nothing to
-    discover. A standalone deployment has no set to follow and stays direct.
+    discover. A standalone deployment has no set to follow and stays direct. A
+    sharded cluster is addressed through its router, which is neither a set
+    member nor a node to pin to.
     """
     config = _config(name)
+    if is_sharded(name):
+        host, port = config["router"]
+        return f"mongodb://{host}:{port}"
     if config["replica_set"] is None:
         return node_uri(*config["nodes"][0])
     hosts = ",".join(f"{host}:{port}" for host, port in config["nodes"])
@@ -92,6 +121,10 @@ def current_primary(name, client_factory=MongoClient):
     A point-in-time answer, only good for deciding which nodes to aim reads at.
     Never build a write URI from it - see the module docstring.
     """
+    if is_sharded(name):
+        raise ValueError(
+            f"'{name}' is a sharded cluster: it has no single primary. Use "
+            f"is_sharded() and address the router with write_uri() instead.")
     config = _config(name)
     if config["replica_set"] is None:
         return config["nodes"][0]
@@ -109,7 +142,7 @@ def secondary_uris(name, client_factory=MongoClient):
     necessarily the node named `mongo-primary`, and the write URI is no longer
     a per-node URI to diff against.
     """
-    if node_count(name) == 1:
+    if is_sharded(name) or node_count(name) == 1:
         return []
     primary = current_primary(name, client_factory=client_factory)
     return [node_uri(host, port)

@@ -2,7 +2,7 @@ import argparse
 import sys
 from datetime import datetime
 from mellow_cli.session import MellowSession
-from mellow_cli.deployment import Deployment, node_uri
+from mellow_cli.deployment import DEPLOYMENTS, Deployment, node_uri
 from mellow_cli.repl import Repl, parse_dict
 
 
@@ -19,7 +19,7 @@ def resolve_mongo_uri(deployment, mongo_uri, client_factory=None):
 
 
 def _add_conn_args(p):
-    p.add_argument("--deployment", choices=["single", "rs3", "rs5"])
+    p.add_argument("--deployment", choices=list(DEPLOYMENTS))
     p.add_argument("--db")
     p.add_argument("--collection", default="records")
     p.add_argument("--mode", default="preprocess", choices=["preprocess", "rewrite"])
@@ -89,7 +89,7 @@ def main(argv=None):
 
     if args.command == "up":
         if not args.deployment:
-            print("error: `up` requires --deployment {single,rs3,rs5}", file=sys.stderr)
+            print(f"error: `up` requires --deployment {{{','.join(DEPLOYMENTS)}}}", file=sys.stderr)
             return 1
         deployment = Deployment(args.deployment)
         deployment.up()
