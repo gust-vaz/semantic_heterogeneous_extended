@@ -1,0 +1,89 @@
+# A sharded cluster with a single shard. Same code path as sh4 and sh8 - a router,
+# a config server, sharded collections, the same $merge - with nothing to
+# distribute across. It is the intercept the scale axis is measured from:
+# comparing sh4 against a plain standalone would change the router, the config
+# server and the shard count all at once, and no single number could be
+# attributed to distribution.
+#
+# The WiredTiger cache defaults to its 0.25 GB minimum so the sharded stacks fit a
+# development machine; a benchmark machine raises it with MONGO_CACHE_GB.
+x-mongo: &mongo
+  image: mongo:8.0.12
+  restart: unless-stopped
+  ulimits:
+    nofile:
+      soft: 64000
+      hard: 64000
+  networks:
+    - mellow-sh-net
+
+x-health: &health
+  interval: 5s
+  timeout: 5s
+  retries: 20
+
+services:
+  cfg1:
+    <<: *mongo
+    command: mongod --configsvr --replSet cfg --bind_ip_all --port 27019 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - cfg1-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27019", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  shard1:
+    <<: *mongo
+    command: mongod --shardsvr --replSet shard1 --bind_ip_all --port 27018 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    volumes:
+      - shard1-data:/data/db
+    healthcheck:
+      <<: *health
+      test: ["CMD", "mongosh", "--port", "27018", "--quiet", "--eval", "db.adminCommand('ping')"]
+
+  mongos:
+    <<: *mongo
+    command: mongos --configdb cfg/cfg1:27019 --bind_ip_all --port 27017
+    ports:
+      - "${MONGOS_HOST_PORT:-27017}:27017"
+    depends_on:
+      cfg1: { condition: service_healthy }
+      shard1: { condition: service_healthy }
+
+  mongo-init:
+    image: mongo:8.0.12
+    restart: "no"
+    depends_on:
+      mongos:
+        condition: service_started
+    environment:
+      SHARD_COUNT: "1"
+    command: mongosh --nodb /docker-entrypoint-initdb.d/init-sharded.js
+    volumes:
+      - ./docker/sharded/init-sharded.js:/docker-entrypoint-initdb.d/init-sharded.js:ro
+    networks:
+      - mellow-sh-net
+
+  runner:
+    build: ./docker/runner
+    depends_on:
+      mongo-init:
+        condition: service_completed_successfully
+    environment:
+      MONGO_URI: "mongodb://mongos:27017"
+      MONGO_HOST: "mongodb://mongos:27017"
+    volumes:
+      - .:/app
+    working_dir: /app
+    networks:
+      - mellow-sh-net
+    profiles:
+      - run
+
+networks:
+  mellow-sh-net:
+    driver: bridge
+
+volumes:
+  cfg1-data:
+  shard1-data:

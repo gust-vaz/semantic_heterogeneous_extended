@@ -40,6 +40,13 @@ DEPLOYMENTS = {
                   ("mongo-secondary-3", 27020),
                   ("mongo-secondary-4", 27021)],
     },
+    "sh1": {
+        "compose": "docker-compose.shard1.yml",
+        "replica_set": None,
+        "nodes": [],
+        "router": ("mongos", 27017),
+        "shards": 1,
+    },
     "sh4": {
         "compose": "docker-compose.shard4.yml",
         "replica_set": None,

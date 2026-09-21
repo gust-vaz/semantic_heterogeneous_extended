@@ -10,6 +10,7 @@ DEPLOYMENTS = {
     "rs3": {"compose": "docker-compose.replicaset.yml", "ports": [27017, 27018, 27019]},
     "rs5": {"compose": "docker-compose.replicaset5.yml",
             "ports": [27017, 27018, 27019, 27020, 27021]},
+    "sh1": {"compose": "docker-compose.shard1.yml", "ports": [27017], "shards": 1},
     "sh4": {"compose": "docker-compose.shard4.yml", "ports": [27017], "shards": 4},
     "sh8": {"compose": "docker-compose.shard8.yml", "ports": [27017], "shards": 8},
 }

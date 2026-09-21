@@ -13,7 +13,9 @@ import pytest
 
 from benchmarks.tests.compose_config import command, needs_docker, resolved
 
-COMPOSES = {"docker-compose.shard4.yml": 4, "docker-compose.shard8.yml": 8}
+COMPOSES = {"docker-compose.shard1.yml": 1,
+            "docker-compose.shard4.yml": 4,
+            "docker-compose.shard8.yml": 8}
 
 
 @needs_docker
@@ -71,6 +73,7 @@ def test_cache_size_is_small_by_default_and_raisable_without_editing(compose):
 @needs_docker
 @pytest.mark.slow
 @pytest.mark.parametrize("compose_file,shards,host_port", [
+    ("docker-compose.shard1.yml", 1, "28116"),
     ("docker-compose.shard4.yml", 4, "28117"),
     ("docker-compose.shard8.yml", 8, "28118"),
 ])

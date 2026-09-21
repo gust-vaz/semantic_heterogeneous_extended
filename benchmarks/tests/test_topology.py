@@ -208,3 +208,20 @@ def test_topology_map_agrees_with_the_stack_it_names(name, shards):
     assert command(services[host]).startswith("mongos ")
     assert f"--port {port}" in command(services[host])
     assert services["runner"]["environment"]["MONGO_URI"] == topology.write_uri(name)
+
+
+def test_sh1_is_sharded_with_one_shard():
+    assert topology.is_sharded("sh1")
+    assert topology.shard_count("sh1") == 1
+
+
+def test_sh1_is_addressed_through_its_router():
+    # Same code path as sh4 and sh8 with nothing to distribute across: it is the
+    # intercept the scale axis is measured from. Comparing sh4 against a plain
+    # standalone would change the router, the config server and the shard count
+    # all at once.
+    assert topology.write_uri("sh1") == "mongodb://mongos:27017"
+
+
+def test_sh1_has_no_secondaries_to_read_from():
+    assert topology.secondary_uris("sh1") == []
