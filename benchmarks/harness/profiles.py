@@ -10,11 +10,13 @@ PROFILES = {
               "measure_s": 5, "reps": 1, "real_max_files": 1},
     "small": {"records": 20_000, "clients": 4, "warmup_s": 5,
               "measure_s": 20, "reps": 3, "real_max_files": 3},
+    "medium": {"records": 100_000, "clients": 6, "warmup_s": 10,
+               "measure_s": 40, "reps": 3, "real_max_files": 10},
     "full": {"records": 200_000, "clients": 8, "warmup_s": 10,
              "measure_s": 60, "reps": 5, "real_max_files": None},
 }
 
-DEFAULT_PROFILE = "small"
+DEFAULT_PROFILE = "medium"
 
 
 def get_profile(name, **overrides):

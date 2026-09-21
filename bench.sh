@@ -6,7 +6,7 @@
 # stack down with its volumes so the next cell starts clean.
 set -euo pipefail
 
-PROFILE="small"
+PROFILE="medium"
 CORPUS="synthetic"
 OUT_DIR="results"
 DEPLOYMENTS=""
@@ -25,7 +25,8 @@ Experiments:
   all   Run b1, b3, b6 then b4
 
 Options:
-  --profile <smoke|small|full>   Sizing profile (default: small)
+  --profile <smoke|small|medium|full>
+                                 Sizing profile (default: medium)
   --deployments <csv>            Override the sweep, e.g. single,rs3
   --corpus <synthetic|real>      Data source (default: synthetic)
   --out <dir>                    Output directory (default: results)

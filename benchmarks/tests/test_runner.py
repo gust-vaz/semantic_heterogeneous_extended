@@ -1,4 +1,5 @@
 import pytest
+from benchmarks.harness.profiles import DEFAULT_PROFILE
 from benchmarks.harness.runner import (
     base_parser, read_targets_for, client_specs, row_from, warn_if_noisy,
     resolve_endpoints, warn_if_target_unavailable,
@@ -13,9 +14,11 @@ SECONDARIES = [
 ]
 
 
-def test_base_parser_defaults_to_the_small_profile():
+def test_base_parser_defaults_to_the_configured_profile():
+    # the value itself is pinned in test_profiles; what matters here is that the
+    # parser follows it instead of hard-coding a profile name of its own
     args = base_parser("b1").parse_args(["--deployment", "rs3"])
-    assert args.profile == "small"
+    assert args.profile == DEFAULT_PROFILE
     assert args.corpus == "synthetic"
     assert args.out
 

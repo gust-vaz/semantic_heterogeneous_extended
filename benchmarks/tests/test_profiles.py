@@ -4,8 +4,8 @@ from benchmarks.harness.profiles import PROFILES, DEFAULT_PROFILE, get_profile
 REQUIRED_KEYS = {"records", "clients", "warmup_s", "measure_s", "reps", "real_max_files"}
 
 
-def test_default_profile_is_small():
-    assert DEFAULT_PROFILE == "small"
+def test_default_profile_is_medium():
+    assert DEFAULT_PROFILE == "medium"
 
 
 def test_every_profile_has_all_keys():
@@ -13,9 +13,9 @@ def test_every_profile_has_all_keys():
         assert set(values) == REQUIRED_KEYS, f"profile {name} has wrong keys"
 
 
-def test_smoke_is_the_cheapest_profile():
-    assert PROFILES["smoke"]["records"] < PROFILES["small"]["records"]
-    assert PROFILES["small"]["records"] < PROFILES["full"]["records"]
+def test_profiles_are_ordered_by_corpus_size():
+    assert (PROFILES["smoke"]["records"] < PROFILES["small"]["records"]
+            < PROFILES["medium"]["records"] < PROFILES["full"]["records"])
 
 
 def test_get_profile_returns_a_copy():
