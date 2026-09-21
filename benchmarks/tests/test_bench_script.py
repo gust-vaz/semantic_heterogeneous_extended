@@ -58,3 +58,22 @@ def test_script_checks_for_docker_before_running_anything():
     text = _read()
     assert "command -v docker" in text
     assert "docker compose version" in text
+
+
+def test_an_absolute_out_path_is_refused_before_anything_starts():
+    """--out is interpreted inside the runner container, where the repo is
+    mounted at /app. An absolute host path is written inside the container and
+    lost with it - silently discarding the results and the resume state that
+    lets an interrupted campaign continue."""
+    done = subprocess.run(["bash", SCRIPT, "b1", "--out", "/tmp/somewhere"],
+                          capture_output=True, text=True)
+    assert done.returncode != 0
+    assert "/tmp/somewhere" in done.stderr
+    assert "container" in done.stderr
+
+
+def test_a_repo_relative_out_path_is_accepted():
+    # reaches the docker check rather than the argument check
+    done = subprocess.run(["bash", SCRIPT, "b1", "--out", "results-x", "--help"],
+                          capture_output=True, text=True)
+    assert done.returncode == 0

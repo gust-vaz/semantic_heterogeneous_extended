@@ -23,6 +23,16 @@ def test_base_parser_defaults_to_the_configured_profile():
     assert args.out
 
 
+def test_base_parser_defaults_to_resuming():
+    args = base_parser("b1").parse_args(["--deployment", "rs3"])
+    assert args.fresh is False
+
+
+def test_base_parser_accepts_fresh():
+    args = base_parser("b1").parse_args(["--deployment", "rs3", "--fresh"])
+    assert args.fresh is True
+
+
 def test_base_parser_requires_a_deployment():
     with pytest.raises(SystemExit):
         base_parser("b1").parse_args([])

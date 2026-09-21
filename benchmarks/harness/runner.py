@@ -27,6 +27,8 @@ def base_parser(experiment):
                         help="Override the profile's client count")
     parser.add_argument("--records", type=int, default=None,
                         help="Override the profile's synthetic record count")
+    parser.add_argument("--fresh", action="store_true",
+                        help="Ignore rows already written and run every cell again")
     return parser
 
 

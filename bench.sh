@@ -11,6 +11,7 @@ CORPUS="synthetic"
 OUT_DIR="results"
 DEPLOYMENTS=""
 KEEP_GOING=0
+FRESH=""
 CURRENT_COMPOSE=""
 
 usage() {
@@ -31,6 +32,7 @@ Options:
   --corpus <synthetic|real>      Data source (default: synthetic)
   --out <dir>                    Output directory (default: results)
   --keep-going                   Continue the sweep after a failing cell
+  --fresh                        Re-run cells that already have rows
   -h, --help                     Show this help
 EOF
 }
@@ -107,7 +109,8 @@ run_cell() {
       --deployment "$deployment" \
       --profile "$PROFILE" \
       --corpus "$CORPUS" \
-      --out "$OUT_DIR" || status=$?
+      --out "$OUT_DIR" \
+      ${FRESH:+$FRESH} || status=$?
 
   teardown
 
@@ -142,10 +145,26 @@ while [ $# -gt 0 ]; do
     --corpus)      CORPUS="$2"; shift 2 ;;
     --out)         OUT_DIR="$2"; shift 2 ;;
     --keep-going)  KEEP_GOING=1; shift ;;
+    --fresh)       FRESH="--fresh"; shift ;;
     -h|--help)     usage; exit 0 ;;
     *)             echo "Unknown option '$1'" >&2; usage >&2; exit 2 ;;
   esac
 done
+
+# Experiments run inside the runner container, where the repo is bind-mounted at
+# /app. An absolute host path is therefore written INSIDE the container and
+# discarded when it exits, taking both the results and the resume state with it -
+# silently, and looking exactly like a campaign that never ran.
+case "$OUT_DIR" in
+  /*)
+    echo "ERROR: --out must be a path inside the repository, not '$OUT_DIR'." >&2
+    echo "Experiments run in the runner container with the repo mounted at /app," >&2
+    echo "so an absolute host path is written inside the container and lost when" >&2
+    echo "it exits - discarding the results and the campaign's resume state." >&2
+    echo "Use a repo-relative path, e.g. --out results." >&2
+    exit 2
+    ;;
+esac
 
 if [ "$EXPERIMENT" = "all" ]; then
   EXPERIMENTS="b1 b3 b6 b4"

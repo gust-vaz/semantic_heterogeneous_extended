@@ -8,7 +8,7 @@ increasing chain lengths.
 import sys
 
 from benchmarks.harness import corpus as corpus_module
-from benchmarks.harness import results, runner, topology
+from benchmarks.harness import results, resume, runner, topology
 from benchmarks.harness.profiles import get_profile
 from benchmarks.harness.workload import run_workload
 
@@ -16,6 +16,11 @@ EXPERIMENT = "b6"
 CHAIN_LENGTHS = [1, 5, 10, 25, 50]
 OPERATION_MODES = ["preprocess", "rewrite"]
 WRITE_CONCERN = "majority"
+
+#: What makes one row of this experiment distinct from another. A campaign is
+#: resumed against these, so every axis the sweep varies has to appear here.
+KEY_COLUMNS = ["experiment", "deployment", "corpus", "operation_mode",
+               "chain_length", "repetition"]
 
 
 def cells(_deployment, chain_lengths=None):
@@ -47,9 +52,25 @@ def main(argv=None):
     mongo_version = topology.server_version(primary)
 
     out_path = results.result_path(args.out, EXPERIMENT, args.profile)
-    rows = []
+    done = set() if args.fresh else resume.completed_cells(
+        args.out, EXPERIMENT, args.profile, KEY_COLUMNS)
+    written = skipped = 0
 
     for chain_length, operation_mode in cells(args.deployment, lengths):
+        # Read-only, so the corpus is built once and shared by every repetition.
+        # Pending repetitions are resolved before paying for that build.
+        pending = [repetition for repetition in range(profile["reps"])
+                   if resume.cell_key(
+                       {"experiment": EXPERIMENT, "deployment": args.deployment,
+                        "corpus": args.corpus, "operation_mode": operation_mode,
+                        "chain_length": chain_length,
+                        "repetition": repetition}, KEY_COLUMNS) not in done]
+        skipped += profile["reps"] - len(pending)
+        if not pending:
+            print(f"[{EXPERIMENT}] {args.deployment} / chain={chain_length} "
+                  f"/ {operation_mode}: all reps done, skipping", flush=True)
+            continue
+
         print(f"[{EXPERIMENT}] {args.deployment} / chain={chain_length} "
               f"/ {operation_mode}", flush=True)
         handle = corpus_module.build_corpus(
@@ -62,7 +83,7 @@ def main(argv=None):
             specs = runner.client_specs(
                 profile["clients"], "primary", "split",
                 operation_mode, WRITE_CONCERN, primary, [])
-            for repetition in range(profile["reps"]):
+            for repetition in pending:
                 result = run_workload(specs, handle, read_ratio=1.0,
                                       warmup_s=profile["warmup_s"],
                                       measure_s=profile["measure_s"])
@@ -75,12 +96,13 @@ def main(argv=None):
                     operation_mode=operation_mode, write_concern=WRITE_CONCERN,
                     chain_length=chain_length, mix="read_only")
                 runner.warn_if_noisy(row)
-                rows.append(row)
+                results.write_rows(out_path, [row])
+                written += 1
         finally:
             corpus_module.drop_corpus(primary, handle)
 
-    results.write_rows(out_path, rows)
-    print(f"[{EXPERIMENT}] wrote {len(rows)} rows to {out_path}", flush=True)
+    print(f"[{EXPERIMENT}] wrote {written} rows, skipped {skipped} already done,"
+          f" to {out_path}", flush=True)
     return 0
 
 

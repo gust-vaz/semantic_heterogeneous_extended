@@ -9,7 +9,7 @@ because that is exactly where preprocess pays and rewrite does not.
 import sys
 
 from benchmarks.harness import corpus as corpus_module
-from benchmarks.harness import results, runner, topology
+from benchmarks.harness import results, resume, runner, topology
 from benchmarks.harness.profiles import get_profile
 from benchmarks.harness.workload import run_workload
 
@@ -19,6 +19,11 @@ MIXES = {"read_heavy": 0.95, "write_heavy": 0.05}
 READ_TARGETS = ["primary", "secondaries"]
 WRITE_CONCERN = "majority"
 CHAIN_LENGTH = 5
+
+#: What makes one row of this experiment distinct from another. A campaign is
+#: resumed against these, so every axis the sweep varies has to appear here.
+KEY_COLUMNS = ["experiment", "deployment", "corpus", "operation_mode",
+               "read_target", "mix", "repetition"]
 
 
 def cells(deployment, mixes=None):
@@ -47,10 +52,21 @@ def main(argv=None):
 
     selected = [args.mix] if args.mix else None
     out_path = results.result_path(args.out, EXPERIMENT, args.profile)
-    rows = []
+    done = set() if args.fresh else resume.completed_cells(
+        args.out, EXPERIMENT, args.profile, KEY_COLUMNS)
+    written = skipped = 0
 
     for operation_mode, read_target, mix_name in cells(args.deployment, selected):
         for repetition in range(profile["reps"]):
+            # Mixed load mutates state, so each repetition gets a fresh corpus.
+            # The skip therefore goes before the build, not after it.
+            if resume.cell_key(
+                    {"experiment": EXPERIMENT, "deployment": args.deployment,
+                     "corpus": args.corpus, "operation_mode": operation_mode,
+                     "read_target": read_target, "mix": mix_name,
+                     "repetition": repetition}, KEY_COLUMNS) in done:
+                skipped += 1
+                continue
             print(f"[{EXPERIMENT}] {args.deployment} / {operation_mode} / "
                   f"{read_target} / {mix_name} rep={repetition}", flush=True)
             runner.warn_if_target_unavailable(read_target, secondaries)
@@ -75,12 +91,13 @@ def main(argv=None):
                     operation_mode=operation_mode, write_concern=WRITE_CONCERN,
                     chain_length=CHAIN_LENGTH, mix=mix_name)
                 runner.warn_if_noisy(row)
-                rows.append(row)
+                results.write_rows(out_path, [row])
+                written += 1
             finally:
                 corpus_module.drop_corpus(primary, handle)
 
-    results.write_rows(out_path, rows)
-    print(f"[{EXPERIMENT}] wrote {len(rows)} rows to {out_path}", flush=True)
+    print(f"[{EXPERIMENT}] wrote {written} rows, skipped {skipped} already done,"
+          f" to {out_path}", flush=True)
     return 0
 
 
