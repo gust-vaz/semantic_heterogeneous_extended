@@ -2,7 +2,8 @@ import os
 import pandas as pd
 import pytest
 from benchmarks.harness.results import (
-    COLUMNS, make_row, run_metadata, write_rows, result_path,
+    COLUMNS, SHARD_COLUMNS, make_row, make_shard_row, run_metadata, write_rows,
+    result_path,
 )
 
 
@@ -72,3 +73,60 @@ def test_write_rows_ignores_an_empty_batch(tmp_path):
 def test_result_path_encodes_experiment_profile_and_date():
     path = result_path("results", "b1", "small", today="20260816")
     assert path == os.path.join("results", "b1", "b1_small_20260816.csv")
+
+
+def test_shard_schema_carries_the_sharding_axes():
+    for column in ["shards", "shard_key_field", "shard_key_kind", "shard_key_role",
+                   "shard_key_cardinality", "skew", "coverage", "missing_fraction",
+                   "chunk_size_mb", "presplit_chunks", "balancer"]:
+        assert column in SHARD_COLUMNS
+
+
+def test_shard_schema_carries_the_event_measurements():
+    for column in ["apply_s", "docs_before", "docs_after", "docs_written",
+                   "docs_relocated", "dist_before", "dist_after",
+                   "imbalance_before", "imbalance_after", "chunks_before",
+                   "chunks_after", "chunks_moved", "bytes_moved", "orphans_after",
+                   "converge_s"]:
+        assert column in SHARD_COLUMNS
+
+
+def test_shard_schema_is_not_the_replica_set_schema():
+    # read_target and write_concern are meaningless on single-node shards, and a
+    # single wide schema would leave every row of both series half empty
+    assert "read_target" not in SHARD_COLUMNS
+    assert "write_concern" not in SHARD_COLUMNS
+    assert "nodes" not in SHARD_COLUMNS
+
+
+def test_make_shard_row_rejects_a_replica_set_column():
+    with pytest.raises(ValueError) as exc:
+        make_shard_row(experiment="s1", read_target="primary")
+    assert "read_target" in str(exc.value)
+
+
+def test_make_row_rejects_a_sharding_column():
+    with pytest.raises(ValueError) as exc:
+        make_row(experiment="b1", docs_relocated=3)
+    assert "docs_relocated" in str(exc.value)
+
+
+def test_make_shard_row_fills_missing_columns_with_empty_string():
+    row = make_shard_row(experiment="s1", shards=4)
+    assert set(row) == set(SHARD_COLUMNS)
+    assert row["shards"] == 4
+    assert row["docs_relocated"] == ""
+
+
+def test_write_rows_accepts_the_shard_schema(tmp_path):
+    path = str(tmp_path / "s1.csv")
+    write_rows(path, [make_shard_row(experiment="s1", shards=4)],
+               columns=SHARD_COLUMNS)
+    frame = pd.read_csv(path)
+    assert list(frame.columns) == SHARD_COLUMNS
+
+
+def test_write_rows_still_defaults_to_the_b_series_schema(tmp_path):
+    path = str(tmp_path / "b1.csv")
+    write_rows(path, [make_row(experiment="b1", ops=1)])
+    assert list(pd.read_csv(path).columns) == COLUMNS
