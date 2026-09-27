@@ -58,7 +58,7 @@ def domain_for_chain(chain_length):
 
 def build_synthetic(primary_uri, records, chain_length, operation_mode,
                     write_concern="majority", seed=42, fields=8, domain=None,
-                    evolution_fields=2, shard_key=None):
+                    evolution_fields=2, shard_key=None, skew=0.0):
     """Fabricate a corpus with DatabaseGenerator and apply `chain_length` operations.
 
     `domain` defaults to whatever this chain length needs. Sweeps that vary
@@ -76,7 +76,7 @@ def build_synthetic(primary_uri, records, chain_length, operation_mode,
         )
     rng = random.Random(seed)
     generator = DatabaseGenerator(host=primary_uri, write_concern=write_concern,
-                                  shard_key=shard_key, rng=rng)
+                                  shard_key=shard_key, rng=rng, skew=skew)
     generator.generate(
         number_of_records=records,
         number_of_versions=1,
@@ -133,7 +133,7 @@ def dataset_available(root=None):
 
 
 def build_real(primary_uri, operation_mode, write_concern="majority",
-               max_files=None, dataset_root=None, seed=42):
+               max_files=None, dataset_root=None, seed=42, shard_key=None):
     """Load the DATASUS mortality corpus and apply the CID-9 -> CID-10 operations."""
     root = dataset_root or DATASET_ROOT
     source = os.path.join(root, SOURCE_SUBDIR)
@@ -146,7 +146,8 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
     database_name = 'benchdb_' + uuid.uuid4().hex[:12]
     collection_name = 'col_' + uuid.uuid4().hex[:12]
     collection = BasicCollection(database_name, collection_name, primary_uri,
-                                 operation_mode, write_concern=write_concern)
+                                 operation_mode, write_concern=write_concern,
+                                 shard_key=shard_key)
 
     # insert_many_by_csv ingests every CSV in a folder, so a capped run copies
     # just the first N files into a scratch folder rather than the whole set.
@@ -215,5 +216,6 @@ def build_corpus(kind, **kwargs):
         kwargs.pop("records", None)
         kwargs.pop("chain_length", None)
         kwargs.pop("domain", None)
+        kwargs.pop("skew", None)
         return build_real(**kwargs)
     raise ValueError(f"Unknown corpus '{kind}'. Choose: synthetic, real")

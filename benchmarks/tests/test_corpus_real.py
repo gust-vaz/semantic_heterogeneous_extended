@@ -103,3 +103,32 @@ def test_same_seed_produces_the_same_real_queries_despite_concurrent_traffic(
     assert len(first.query_set) == 50
     assert first.query_set == second.query_set
     assert first_records == second_records
+
+
+def test_build_corpus_drops_skew_for_the_real_corpus(tmp_path, primary_uri):
+    """Experiments pass the union of both kinds' arguments. The real corpus has
+    whatever skew the data has, so the knob must be dropped, not raise TypeError."""
+    with pytest.raises(FileNotFoundError):
+        build_corpus("real", primary_uri=primary_uri, operation_mode="preprocess",
+                     skew=1.5, records=10, dataset_root=str(tmp_path / "nope"))
+
+
+def test_build_real_accepts_a_shard_key():
+    """Without this the DATASUS corpus cannot be sharded at all, and the S series
+    needs both corpora."""
+    import inspect
+
+    from benchmarks.harness.corpus import build_real
+    assert "shard_key" in inspect.signature(build_real).parameters
+
+
+def test_build_corpus_hands_a_shard_key_to_the_real_corpus(tmp_path, primary_uri):
+    from semantic_heterogeneous_database import sharding
+    if sharding.is_mongos(MongoClient(primary_uri)):
+        pytest.skip("asserts the off-cluster warning")
+    root = _mini_dataset(tmp_path)
+    with pytest.warns(RuntimeWarning, match="cid"):
+        handle = build_corpus("real", primary_uri=primary_uri,
+                              operation_mode="preprocess", dataset_root=root,
+                              shard_key={"cid": "hashed"})
+    MongoClient(primary_uri).drop_database(handle.database_name)

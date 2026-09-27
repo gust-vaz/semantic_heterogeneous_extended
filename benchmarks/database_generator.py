@@ -13,8 +13,11 @@ class DatabaseGenerator:
     OPERATION_TYPE = ['merging', 'translation','splitting']
 
     def __init__(self, host='localhost', write_concern='majority',
-                 read_uri=None, read_mode='split', shard_key=None, rng=None):
+                 read_uri=None, read_mode='split', shard_key=None, rng=None,
+                 skew=0.0):
         self.rng = rng if rng is not None else random
+        self.skew = skew
+        self.field_weights = dict()
         self.host = host
         self.write_concern = write_concern
         self.read_uri = read_uri
@@ -43,11 +46,19 @@ class DatabaseGenerator:
 
     ## Pensar depois em uma distribuição para o número de campos ao inves de ser fixo
     #  alem de um numero delimitado de valores possiveis para os campos
+    def __draw(self, field_name):
+        """One value for this field, weighted by `skew` (uniform when 0.0)."""
+        domain = self.field_domain[field_name]
+        weights = self.field_weights.get(field_name)
+        if not weights:
+            return self.rng.choice(domain)
+        return self.rng.choices(domain, weights=weights, k=1)[0]
+
     def generate_record(self):
         new_record = {}                
 
         for field in self.fields:
-            new_record[field[0]] = self.rng.choice(self.field_domain[field[0]])            
+            new_record[field[0]] = self.__draw(field[0])            
         
         new_record['valid_from_date']=datetime.fromordinal(self.rng.randint(365*2000, 365*2100))
 
@@ -216,6 +227,12 @@ class DatabaseGenerator:
             self.fields.append((field_name, field_type))
             ##Generating fields domain of available values for each field.
             self.field_domain[field_name] = self.__generate_field_domain(field_type, number_of_values_in_domain)
+            if self.skew:
+                ##Zipf weights over the domain's own order, so the same seed and
+                ##skew always concentrate on the same values.
+                self.field_weights[field_name] = [
+                    1.0 / (rank + 1) ** self.skew
+                    for rank in range(number_of_values_in_domain)]
 
         self.evolution_fields = self.fields[:number_of_evolution_fields]
 

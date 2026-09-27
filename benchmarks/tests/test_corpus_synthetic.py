@@ -125,3 +125,92 @@ def test_same_seed_produces_the_same_corpus_despite_concurrent_traffic(primary_u
     assert _raw_records(primary_uri, first) == _raw_records(primary_uri, second)
     assert _registered_operations(primary_uri, first) == _registered_operations(primary_uri, second)
     assert first.database_name != second.database_name
+
+def _value_counts(uri, handle, field):
+    from collections import Counter
+    raw = MongoClient(uri)[handle.database_name][handle.collection_name]
+    return Counter(document[field] for document in raw.find({}, {field: 1}))
+
+
+def test_without_skew_values_are_drawn_uniformly(primary_uri, cleanup_corpus):
+    handle = cleanup_corpus(primary_uri, build_synthetic(
+        primary_uri, records=2000, chain_length=0, operation_mode="preprocess",
+        domain=20, skew=0.0))
+    counts = _value_counts(primary_uri, handle, "evo0")
+    assert len(counts) == 20
+    assert max(counts.values()) < 3 * min(counts.values())
+
+
+def test_skew_concentrates_the_domain(primary_uri, cleanup_corpus):
+    """A uniform corpus gives every shard key a perfect spread, so no hotspot
+    exists to observe and half of what a shard key choice costs disappears."""
+    handle = cleanup_corpus(primary_uri, build_synthetic(
+        primary_uri, records=2000, chain_length=0, operation_mode="preprocess",
+        domain=20, skew=1.5))
+    counts = _value_counts(primary_uri, handle, "evo0")
+    assert max(counts.values()) > 10 * min(counts.values())
+
+
+def test_the_same_seed_and_skew_produce_the_same_corpus(primary_uri, cleanup_corpus):
+    first = cleanup_corpus(primary_uri, build_synthetic(
+        primary_uri, records=200, chain_length=0, operation_mode="preprocess",
+        domain=20, skew=1.5, seed=11))
+    second = cleanup_corpus(primary_uri, build_synthetic(
+        primary_uri, records=200, chain_length=0, operation_mode="preprocess",
+        domain=20, skew=1.5, seed=11))
+    assert (_value_counts(primary_uri, first, "evo0")
+            == _value_counts(primary_uri, second, "evo0"))
+
+
+def test_skew_does_not_bias_which_values_operations_evolve(primary_uri):
+    """Records are drawn skewed; semantic operations keep drawing uniformly.
+    Coverage is a separate axis, chosen from the corpus once it exists.
+
+    Asserted on the MEAN rank of the values operations touch, not the maximum.
+    Measured over eight seeds at skew 2.0 with a 60-value domain: uniform
+    operations gave mean ranks 22.6-35.3, weighted ones 5.5-12.1 - no overlap.
+    The maxima overlap almost completely (55-59 against 17-58), because
+    __check_evolution refuses to reuse a value and its retry loop pushes even a
+    weighted draw out to the tail. An assertion on the maximum passes either way.
+
+    The domain is sized for the chain: generate_version refuses to evolve a
+    value twice, and too small a domain recurses until RecursionError.
+    """
+    import random
+    import statistics
+
+    from benchmarks.database_generator import DatabaseGenerator
+
+    domain_size = 60
+    means = []
+    for seed in range(4):
+        generator = DatabaseGenerator(host=primary_uri, rng=random.Random(seed),
+                                      skew=2.0)
+        generator.generate(number_of_records=0, number_of_versions=1,
+                           number_of_fields=4,
+                           number_of_values_in_domain=domain_size,
+                           number_of_evolution_fields=2,
+                           operation_mode="preprocess")
+        try:
+            assert generator.field_weights, "records should draw from a weighted domain"
+            for _ in range(10):
+                generator.generate_version()
+
+            ranks = []
+            for _, _, arguments in generator.operations:
+                if not arguments:
+                    continue
+                order = generator.field_domain[arguments["fieldName"]]
+                for key in ("oldValue", "newValue"):
+                    if key in arguments:
+                        ranks.append(order.index(arguments[key]))
+                for key in ("oldValues", "newValues"):
+                    ranks += [order.index(value) for value in arguments.get(key, [])]
+            assert ranks, "no operation was generated"
+            means.append(statistics.mean(ranks))
+        finally:
+            generator.destroy()
+
+    # midway between the two measured bands
+    assert statistics.mean(means) >= 18, (
+        f"operations look drawn from the weighted domain: mean ranks {means}")
