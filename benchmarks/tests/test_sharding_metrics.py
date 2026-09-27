@@ -185,3 +185,110 @@ def test_matched_by_shard_counts_the_documents_a_filter_finds_on_each_shard():
             assert len([n for n in counts.values() if n]) > 1
     finally:
         client.drop_database("matched_probe")
+
+
+@needs_cluster
+def test_chunk_counts_sum_to_the_collections_chunks(primary_uri):
+    from pymongo import MongoClient
+
+    from benchmarks.harness.sharding_metrics import chunk_counts, set_chunk_size
+
+    client = MongoClient(primary_uri)
+    set_chunk_size(client, 1)
+    client.drop_database("chunk_probe")
+    client.admin.command("enableSharding", "chunk_probe")
+    client["chunk_probe"].create_collection("c")
+    client.admin.command("shardCollection", "chunk_probe.c", key={"k": 1})
+    for point in (10, 20, 30):
+        client.admin.command("split", "chunk_probe.c", middle={"k": point})
+    try:
+        assert sum(chunk_counts(client, "chunk_probe.c").values()) == 4
+    finally:
+        client.drop_database("chunk_probe")
+
+
+@needs_cluster
+def test_chunk_counts_is_empty_for_a_collection_that_is_not_sharded(primary_uri):
+    from pymongo import MongoClient
+
+    from benchmarks.harness.sharding_metrics import chunk_counts
+
+    client = MongoClient(primary_uri)
+    client.drop_database("unsharded_probe")
+    client["unsharded_probe"]["c"].insert_one({"k": 1})
+    try:
+        assert chunk_counts(client, "unsharded_probe.c") == {}
+    finally:
+        client.drop_database("unsharded_probe")
+
+
+@needs_cluster
+def test_the_balancer_converges_and_actually_moves_chunks(primary_uri):
+    import time
+
+    from pymongo import MongoClient
+
+    from benchmarks.harness.sharding_metrics import (
+        chunk_counts, move_marker, moves_since, set_balancer, set_chunk_size,
+        wait_for_balancer)
+
+    client = MongoClient(primary_uri)
+    if client["config"].shards.count_documents({}) < 2:
+        pytest.skip("needs more than one shard to rebalance across")
+    set_balancer(client, False)
+    # MongoDB stores no chunksize setting by default and the built-in 128 MB
+    # makes the balancer inert at any corpus size this campaign can afford.
+    set_chunk_size(client, 1)
+    client.drop_database("balance_probe")
+    client.admin.command("enableSharding", "balance_probe")
+    client["balance_probe"].create_collection("c")
+    client.admin.command("shardCollection", "balance_probe.c", key={"k": 1})
+    client["balance_probe"]["c"].insert_many(
+        [{"k": i, "pad": "x" * 400} for i in range(20000)])
+    for point in (5000, 10000, 15000):
+        client.admin.command("split", "balance_probe.c", middle={"k": point})
+
+    try:
+        assert len(chunk_counts(client, "balance_probe.c")) == 1
+        marker = move_marker(client)
+        set_balancer(client, True)
+        elapsed = wait_for_balancer(client, "balance_probe.c", timeout_s=300)
+        assert elapsed is not None, "balancer did not converge"
+        assert len(chunk_counts(client, "balance_probe.c")) > 1
+        moves = moves_since(client, marker)
+        assert moves, "chunks moved but the changelog reported none"
+        assert all(entry["what"] == "moveChunk.from" for entry in moves)
+
+        # Converged means finished, not started. Measured on this cluster: the
+        # balancer moves about one chunk per round, so a four-chunk collection
+        # keeps changing for a dozen rounds. Returning as soon as movement
+        # began would pass every assertion above and still be wrong, so the
+        # layout has to hold still afterwards.
+        settled = chunk_counts(client, "balance_probe.c")
+        time.sleep(12)
+        assert chunk_counts(client, "balance_probe.c") == settled, (
+            "the balancer was still moving chunks when convergence was declared")
+    finally:
+        set_balancer(client, False)
+        client.drop_database("balance_probe")
+
+
+@needs_cluster
+def test_convergence_is_not_declared_before_anything_happens(primary_uri):
+    """The first version of this detector compared numBalancerRounds against a
+    counter starting at zero, so it passed on its first poll and reported 0.0s.
+    A namespace the balancer will never touch must not converge instantly."""
+    import time
+
+    from pymongo import MongoClient
+
+    from benchmarks.harness.sharding_metrics import set_balancer, wait_for_balancer
+
+    client = MongoClient(primary_uri)
+    set_balancer(client, True)
+    try:
+        started = time.time()
+        wait_for_balancer(client, "nonexistent.collection", timeout_s=20)
+        assert time.time() - started >= 5
+    finally:
+        set_balancer(client, False)
