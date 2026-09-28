@@ -321,3 +321,51 @@ def test_a_collection_on_one_shard_reports_the_others_as_empty(primary_uri):
         assert imbalance(dist) == pytest.approx(shard_count)
     finally:
         client.drop_database("imbalance_probe")
+
+
+@needs_cluster
+@pytest.mark.parametrize("kind", ["hashed", "ranged"])
+def test_a_dominant_shard_key_value_produces_a_chunk_nothing_can_move(
+        primary_uri, kind):
+    """A chunk boundary can only fall between distinct values, so one value
+    holding more than the chunk size gives a chunk MongoDB can neither split
+    nor migrate. A skewed semantic shard key produces exactly that, which is a
+    result of the campaign rather than an obstacle to it."""
+    from pymongo import MongoClient
+
+    from benchmarks.harness.sharding_metrics import (
+        oversized_chunks, set_balancer, set_chunk_size)
+
+    client = MongoClient(primary_uri)
+    set_balancer(client, False)
+    set_chunk_size(client, 1)
+    client.drop_database("jumbo_probe")
+    client.admin.command("enableSharding", "jumbo_probe")
+    client["jumbo_probe"].create_collection("c")
+    pattern = {"k": "hashed" if kind == "hashed" else 1}
+    client.admin.command("shardCollection", "jumbo_probe.c", key=pattern)
+    client["jumbo_probe"]["c"].insert_many(
+        [{"k": "hot", "pad": "x" * 350} for _ in range(18000)]
+        + [{"k": f"v{i % 50:03d}", "pad": "x" * 350} for i in range(2000)])
+
+    try:
+        assert oversized_chunks(client, "jumbo_probe.c", pattern, 1) >= 1
+        # the same collection under a chunk size large enough to hold it has none
+        assert oversized_chunks(client, "jumbo_probe.c", pattern, 64) == 0
+    finally:
+        client.drop_database("jumbo_probe")
+
+
+@needs_cluster
+def test_a_collection_that_is_not_sharded_has_no_oversized_chunks(primary_uri):
+    from pymongo import MongoClient
+
+    from benchmarks.harness.sharding_metrics import oversized_chunks
+
+    client = MongoClient(primary_uri)
+    client.drop_database("nochunk_probe")
+    client["nochunk_probe"]["c"].insert_one({"k": 1})
+    try:
+        assert oversized_chunks(client, "nochunk_probe.c", {"k": 1}, 1) == 0
+    finally:
+        client.drop_database("nochunk_probe")

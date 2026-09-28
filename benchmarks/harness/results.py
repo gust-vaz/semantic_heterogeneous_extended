@@ -37,8 +37,8 @@ SHARD_COLUMNS = [
     # one-shot event measurements (S1, S2, S5)
     "apply_s", "docs_before", "docs_after", "docs_written", "docs_relocated",
     "dist_before", "dist_after", "imbalance_before", "imbalance_after",
-    "chunks_before", "chunks_after", "chunks_moved", "bytes_moved",
-    "orphans_after", "converge_s",
+    "chunks_before", "chunks_after", "chunks_moved", "jumbo_chunks",
+    "bytes_moved", "orphans_after", "converge_s",
     # steady-state measurements (S3, S4)
     "clients", "records", "chain_length", "mix", "warmup_s", "measure_s",
     "ops", "errors", "error_rate", "throughput_ops_s",

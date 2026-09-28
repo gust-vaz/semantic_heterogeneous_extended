@@ -7,6 +7,7 @@ metrics, workload, corpus, topology) and nothing else.
 """
 
 import argparse
+import os
 
 from benchmarks.harness import metrics, resume, results, topology
 from benchmarks.harness.profiles import DEFAULT_PROFILE, PROFILES
@@ -38,6 +39,18 @@ def base_parser(experiment):
     parser.add_argument("--fresh", action="store_true",
                         help="Ignore rows already written and run every cell again")
     return parser
+
+
+def router_uri(deployment):
+    """Where to reach the cluster's router.
+
+    Inside the runner container the Compose service hostname resolves, so this
+    is topology's URI. BENCH_ROUTER_URI lets a host-side run - a test, or a
+    probe larger than a profile allows - point at a published port instead,
+    since `mongos` does not resolve outside the Compose network. The B series
+    carries the same escape hatch as BENCH_PRIMARY_URI.
+    """
+    return os.environ.get("BENCH_ROUTER_URI") or topology.write_uri(deployment)
 
 
 def shard_row(**values):

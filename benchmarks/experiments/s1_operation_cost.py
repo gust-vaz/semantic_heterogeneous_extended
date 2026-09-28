@@ -15,6 +15,7 @@ from datetime import datetime
 
 from pymongo import MongoClient
 
+from benchmarks.experiments import s2_rebalance
 from benchmarks.harness import cell_setup, results, resume, sharding_metrics
 from benchmarks.harness import corpus as corpus_module
 from benchmarks.harness import shard_runner, topology
@@ -102,20 +103,40 @@ def cells(deployment, anchor_only=False):
     return core + extra
 
 
-def split_points(client, handle, field, shard_count):
-    """shard_count - 1 values from the field's own domain, evenly spaced.
+def chunks_needed(client, namespace, chunk_size_mb, shard_count):
+    """How many chunks this collection needs for a balanced layout to be movable.
+
+    One chunk per shard is not enough beyond a few megabytes: MongoDB refuses
+    to move a chunk larger than the chunk size, so a 7 MB collection split into
+    four 1.75 MB chunks is immovable even when perfectly distributed. Sizing
+    the split by volume keeps that artefact out of the jumbo count, leaving
+    only the chunks a dominant shard key value really does force.
+    """
+    total = sum(sharding_metrics.owned_bytes(client, namespace).values())
+    limit = chunk_size_mb * 1024 * 1024
+    return max(shard_count, -(-total // limit))
+
+
+def split_points(client, handle, field, chunks):
+    """chunks - 1 values from the field's own domain, evenly spaced.
 
     Drawn from the corpus rather than computed from a numeric range: shard key
     fields are strings as often as numbers, and only the data knows its order.
+
+    A boundary can only fall between distinct values, so a low-cardinality
+    field caps how finely the collection can be cut. Asking for more chunks
+    than the domain allows yields as many as it does - and whatever stays
+    oversized after that is the finding, not a setup error.
     """
     raw = client[handle.database_name][handle.collection_name]
     values = sorted(raw.distinct(field))
-    if len(values) < shard_count:
+    chunks = min(chunks, len(values))
+    if chunks < 2:
         raise RuntimeError(
             f"field '{field}' has {len(values)} distinct values, too few to "
-            f"pre-split across {shard_count} shards")
-    step = len(values) // shard_count
-    return [values[step * index] for index in range(1, shard_count)]
+            f"pre-split at all")
+    step = len(values) // chunks
+    return [values[step * index] for index in range(1, chunks)]
 
 
 def open_collection(handle, uri):
@@ -136,7 +157,7 @@ def measure_cell(client, args, profile, cell, repetition, mongo_version):
     Returns (row, handle). The handle comes back because S2 continues from this
     corpus rather than paying for its own.
     """
-    uri = topology.write_uri(args.deployment)
+    uri = shard_runner.router_uri(args.deployment)
     field = FIELDS[cell["role"]]
     shard_count = topology.shard_count(args.deployment)
     label = (f"{args.deployment}/{cell['role']}-{cell['kind']}"
@@ -156,11 +177,16 @@ def measure_cell(client, args, profile, cell, repetition, mongo_version):
         shards = sorted(entry["_id"] for entry in client["config"].shards.find())
         presplit_chunks = 0
         if cell["kind"] == "ranged" and cell["role"] != "id" and len(shards) > 1:
+            wanted = chunks_needed(client, namespace, args.chunk_size_mb,
+                                   len(shards))
             presplit_chunks = cell_setup.presplit(
                 client, namespace, field,
-                split_points(client, handle, field, len(shards)), shards)
+                split_points(client, handle, field, wanted), shards)
 
         before = sharding_metrics.distribution(client, namespace)
+        pattern = cell_setup.key_pattern(field, cell["kind"])
+        jumbo = sharding_metrics.oversized_chunks(
+            client, namespace, pattern, args.chunk_size_mb)
         cell_setup.assert_distribution(
             before, cell_setup.expects_spread(shard_count, cell), label)
 
@@ -188,8 +214,8 @@ def measure_cell(client, args, profile, cell, repetition, mongo_version):
             shard_key_role=cell["role"],
             shard_key_cardinality=cell["cardinality"], skew=cell["skew"],
             chunk_size_mb=args.chunk_size_mb,
-            presplit_chunks=presplit_chunks, balancer="off",
-            apply_s=round(apply_s, 3),
+            presplit_chunks=presplit_chunks, jumbo_chunks=jumbo,
+            balancer="off", apply_s=round(apply_s, 3),
             docs_before=sum(before.values()), docs_after=sum(after.values()),
             docs_written=sum(after.values()) - sum(before.values()),
             docs_relocated=sharding_metrics.relocated(before, after, originals),
@@ -210,11 +236,12 @@ def measure_cell(client, args, profile, cell, repetition, mongo_version):
 def main(argv=None):
     args = shard_runner.base_parser(EXPERIMENT).parse_args(argv)
     profile = get_profile(args.profile, clients=args.clients, records=args.records)
-    uri = topology.write_uri(args.deployment)
+    uri = shard_runner.router_uri(args.deployment)
     client = MongoClient(uri)
     mongo_version = topology.server_version(uri)
     out_path = results.result_path(args.out, EXPERIMENT, args.profile)
     done = shard_runner.already_done(args, EXPERIMENT, KEY_COLUMNS)
+    anchor = cells(args.deployment, anchor_only=True)
     written = skipped = 0
 
     for cell in cells(args.deployment):
@@ -237,6 +264,17 @@ def main(argv=None):
             try:
                 shard_runner.emit(out_path, row)
                 written += 1
+                if cell in anchor:
+                    ## S2 rides along on this corpus instead of building its
+                    ## own: setup is 99% of a cell's cost, and the state this
+                    ## operation just left behind is what S2 wants to measure.
+                    namespace = (f"{handle.database_name}."
+                                 f"{handle.collection_name}_processed")
+                    shard_runner.emit(
+                        results.result_path(args.out, s2_rebalance.EXPERIMENT,
+                                            args.profile),
+                        s2_rebalance.rebalance_row(client, args, row,
+                                                   namespace, mongo_version))
             finally:
                 corpus_module.drop_corpus(uri, handle)
 

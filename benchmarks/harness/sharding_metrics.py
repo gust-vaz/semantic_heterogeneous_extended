@@ -48,6 +48,27 @@ def distribution(client, namespace):
     return counts
 
 
+def owned_bytes(client, namespace):
+    """Bytes of live data per shard, empty shards included. Orphans excluded."""
+    sizes = {name: 0 for name in _shard_names(client)}
+    sizes.update({entry["shardName"]: entry["ownedSizeBytes"]
+                  for entry in _entries(client, namespace)})
+    return sizes
+
+
+def arrived(before, after):
+    """Bytes (or documents) that landed on a shard beyond what it already had.
+
+    For a pure migration - the balancer running with nothing else writing -
+    every byte that arrives somewhere left somewhere else, so the sum of the
+    positive deltas is exactly how much moved. The changelog cannot answer
+    this: measured on 8.0.12, a moveChunk.from entry carries the six step
+    timings, min, max, to, from and note, and no byte count at all.
+    """
+    return sum(max(after.get(shard, 0) - before.get(shard, 0), 0)
+               for shard in set(before) | set(after))
+
+
 def orphans(client, namespace):
     """Documents per shard that a migration left behind, awaiting cleanup.
 
@@ -152,6 +173,37 @@ def chunk_counts(client, namespace):
     for chunk in config.chunks.find({"uuid": entry["uuid"]}, {"shard": 1}):
         counts[chunk["shard"]] = counts.get(chunk["shard"], 0) + 1
     return counts
+
+
+def oversized_chunks(client, namespace, key_pattern, chunk_size_mb):
+    """Chunks too large for MongoDB to move - "jumbo" in its own vocabulary.
+
+    A chunk boundary can only fall between distinct shard key values, so a
+    single value holding more than the chunk size produces a chunk that can be
+    neither split nor migrated: moveChunk refuses it with ChunkTooBig (153) and
+    the balancer skips it silently. A skewed semantic shard key produces
+    exactly that - measured on a 20k-document collection where one value held
+    18720 of them, a hashed key gave one jumbo chunk of 7.3 MB against a 1 MB
+    limit, alongside three ordinary ones.
+
+    Counted with dataSize per chunk range, which works for hashed and ranged
+    keys alike. config.chunks carries no jumbo flag on 8.0.12.
+    """
+    database, _, _ = namespace.partition(".")
+    config = client["config"]
+    entry = config.collections.find_one(
+        {"_id": namespace, "dropped": {"$ne": True}})
+    if entry is None:
+        return 0
+    limit = chunk_size_mb * 1024 * 1024
+    oversized = 0
+    for chunk in config.chunks.find({"uuid": entry["uuid"]}):
+        stats = client[database].command(
+            "dataSize", namespace, keyPattern=key_pattern,
+            min=chunk["min"], max=chunk["max"])
+        if stats["size"] > limit:
+            oversized += 1
+    return oversized
 
 
 def set_balancer(client, running):

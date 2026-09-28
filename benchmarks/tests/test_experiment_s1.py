@@ -116,3 +116,44 @@ def test_each_repetition_draws_a_different_corpus(monkeypatch):
             s1.measure_cell(None, args, {"records": 10, "real_max_files": 1},
                             cell, repetition, "8.0.12")
     assert len(set(seeds)) == 3
+
+
+def test_the_split_is_sized_by_volume_not_by_shard_count():
+    """One chunk per shard is immovable beyond a few megabytes: MongoDB refuses
+    to move a chunk larger than the chunk size, so a 7 MB collection in four
+    1.75 MB chunks cannot be balanced even when perfectly distributed."""
+    from benchmarks.experiments import s1_operation_cost as s1
+
+    class _Metrics:
+        @staticmethod
+        def owned_bytes(client, namespace):
+            return {"s1": 4 * 1024 * 1024, "s2": 3 * 1024 * 1024}
+
+    original = s1.sharding_metrics
+    s1.sharding_metrics = _Metrics
+    try:
+        # 7 MB at a 1 MB chunk size needs seven chunks, not four
+        assert s1.chunks_needed(None, "db.c", 1, 4) == 7
+        # a small collection still gets one chunk per shard
+        assert s1.chunks_needed(None, "db.c", 64, 4) == 4
+    finally:
+        s1.sharding_metrics = original
+
+
+def test_split_points_are_capped_by_the_domains_cardinality():
+    """A boundary can only fall between distinct values, so a low-cardinality
+    field caps how finely the collection can be cut."""
+    from benchmarks.experiments.s1_operation_cost import split_points
+
+    class _Handle:
+        database_name, collection_name = "db", "c"
+
+    class _Client:
+        def __getitem__(self, _):
+            return self
+
+        def distinct(self, field):
+            return [f"v{i}" for i in range(5)]
+
+    assert len(split_points(_Client(), _Handle(), "k", 50)) == 4
+    assert len(split_points(_Client(), _Handle(), "k", 3)) == 2

@@ -101,3 +101,14 @@ def test_emit_writes_one_row_with_the_shard_schema(tmp_path):
     frame = pd.read_csv(path)
     assert list(frame.columns) == results.SHARD_COLUMNS
     assert frame["shards"].tolist() == [8]
+
+
+def test_the_router_uri_comes_from_topology_by_default():
+    assert shard_runner.router_uri("sh4") == "mongodb://mongos:27017"
+
+
+def test_a_host_side_run_can_point_at_a_published_port(monkeypatch):
+    """`mongos` does not resolve outside the Compose network, so a test or a
+    probe run from the host needs somewhere else to point."""
+    monkeypatch.setenv("BENCH_ROUTER_URI", "mongodb://localhost:27017")
+    assert shard_runner.router_uri("sh4") == "mongodb://localhost:27017"

@@ -6,7 +6,14 @@ document sat on one shard, and every number looked plausible. A sharding
 measurement that does not check its own distribution first proves nothing.
 """
 
+from pymongo.errors import OperationFailure
+
 from benchmarks.harness import sharding_metrics
+
+#: moveChunk refusing a chunk bigger than the chunk size. Expected whenever a
+#: single shard key value outgrows a chunk, which a skewed semantic key does by
+#: construction - the campaign counts those chunks rather than failing on them.
+CHUNK_TOO_BIG = 153
 
 #: The shard key matrix. The axis that matters is `role` - how the key relates
 #: to semantic evolution - not `kind`. `_id` never carries a data value, and
@@ -72,9 +79,19 @@ def presplit(client, namespace, field, points, shards):
     chunks = list(config.chunks.find({"uuid": entry["uuid"]})
                   .sort(f"min.{field}", 1))
     for index, chunk in enumerate(chunks):
-        client.admin.command("moveChunk", namespace,
-                             bounds=[chunk["min"], chunk["max"]],
-                             to=shards[index % len(shards)])
+        try:
+            client.admin.command("moveChunk", namespace,
+                                 bounds=[chunk["min"], chunk["max"]],
+                                 to=shards[index % len(shards)])
+        except OperationFailure as failure:
+            ## A chunk larger than the chunk size cannot be moved, and a
+            ## boundary can only fall between distinct values - so a dominant
+            ## shard key value produces one by construction. That is a result
+            ## of this campaign, not a setup failure: it is counted by
+            ## sharding_metrics.oversized_chunks and recorded per cell. Any
+            ## other failure is a real one and still stops the cell.
+            if failure.code != CHUNK_TOO_BIG:
+                raise
     return len(points)
 
 
