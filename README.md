@@ -24,21 +24,21 @@ the connection string changes, plus an optional shard key when sharding.
 ## Four ways to run
 
 Pick the setup that matches what you want to do. All four run the exact same library; they
-differ only in how MongoDB is provided. The benchmarks do not support sharded clusters yet.
+differ only in how MongoDB is provided.
 
 | # | Way to run | MongoDB provided by | Best for |
 |---|------------|---------------------|----------|
 | **1** | [Local](#1-local) | A MongoDB you install/run yourself | Library development, quick local runs |
 | **2** | [Single node via Docker Compose](#2-single-node-via-docker-compose) | One Docker container | Reproducible single-node benchmarks |
 | **3** | [Replica set via Docker Compose](#3-replica-set-via-docker-compose-3-or-5-nodes) | 3 or 5 Docker containers | Distributed experiments, failover, consistency |
-| **4** | [Sharded cluster via Docker Compose](#4-sharded-cluster-via-docker-compose-4-or-8-shards) | A config server, 4 or 8 shards and a router, in Docker | Partitioning, shard keys |
+| **4** | [Sharded cluster via Docker Compose](#4-sharded-cluster-via-docker-compose-1-4-or-8-shards) | A config server, 1, 4 or 8 shards and a router, in Docker | Partitioning, shard keys |
 
 All benchmark output goes to the git-ignored `results/` directory, so finished runs never
 clutter the repository.
 
-> Running the **distributed experiments** (B1/B3/B4/B6)? Skip straight to
-> [Running benchmarks](#running-benchmarks) — `./bench.sh` provisions the deployments
-> itself and needs nothing but Docker and bash.
+> Running the **experiments**? Skip straight to [Running benchmarks](#running-benchmarks).
+> `./bench.sh` covers replication (B1/B3/B4/B6) and `./shard-bench.sh` covers sharding
+> (S1–S5); both provision the deployments themselves and need nothing but Docker and bash.
 
 ---
 
@@ -182,16 +182,23 @@ docker compose -f docker-compose.replicaset.yml down -v    # delete all data
 
 ---
 
-## 4. Sharded cluster via Docker Compose (4 or 8 shards)
+## 4. Sharded cluster via Docker Compose (1, 4 or 8 shards)
 
-Runs a sharded MongoDB cluster in Docker: one config server, four or eight shards and one
-`mongos` router. MellowDB only ever talks to the router, so it is the only service that
+Runs a sharded MongoDB cluster in Docker: one config server, one, four or eight shards and
+one `mongos` router. MellowDB only ever talks to the router, so it is the only service that
 publishes a host port.
 
 | Topology | Compose file | Services |
 |----------|--------------|----------|
+| 1 shard | `docker-compose.shard1.yml` | `cfg1`, `shard1`, `mongos` (host port `27017`) |
 | 4 shards | `docker-compose.shard4.yml` | `cfg1`, `shard1`–`shard4`, `mongos` (host port `27017`) |
 | 8 shards | `docker-compose.shard8.yml` | `cfg1`, `shard1`–`shard8`, `mongos` (host port `27017`) |
+
+**`sh1` exists to be measured against.** It is the same code path as the other two — a
+router, a config server, sharded collections — with nothing to distribute across, so it is
+the intercept the scale axis is read from. Comparing `sh4` against a plain standalone would
+change the router, the config server and the shard count all at once, and no single number
+could be attributed to distribution.
 
 Each shard is a single-node replica set. That is deliberate: this deployment is for questions
 about partitioning, not replication, which the replica-set stacks above already cover. It
@@ -270,19 +277,32 @@ run the experiment in an in-network runner container → write the CSV → `comp
 
 `./bench.sh all` runs `b1`, `b3`, `b6`, then `b4` (largest matrix last).
 
-> Sharded clusters are not part of any experiment yet. `bench.sh` and the experiment runner
-> refuse `sh4` / `sh8`, because every experiment assumes a single node or a replica set with
-> secondaries.
+> `bench.sh` refuses `sh1` / `sh4` / `sh8`, and the B-series experiments refuse them too:
+> their central axes — `read_target`, `read_mode`, `write_concern` — mean nothing on
+> single-node shards. Sharding has its own entrypoint,
+> [`./shard-bench.sh`](#sharding-benchmarks-shard-benchsh).
 
 ### Options
 
 | Option | Default | Meaning |
 |--------|---------|---------|
-| `--profile <smoke\|small\|full>` | `small` | Sizing profile (below) |
+| `--profile <smoke\|small\|medium\|full>` | `medium` | Sizing profile (below) |
 | `--deployments <csv>` | per experiment | Override the sweep, e.g. `single,rs3` |
 | `--corpus <synthetic\|real>` | `synthetic` | Data source |
-| `--out <dir>` | `results` | Output directory |
+| `--out <dir>` | `results` | Output directory — **must be repo-relative** (below) |
 | `--keep-going` | off | Continue the sweep after a failing cell |
+| `--fresh` | off | Re-run cells that already have rows |
+
+> **`--out` is read inside the runner container**, where the repository is mounted at
+> `/app`. An absolute host path would be written inside the container and lost when it
+> exits, taking the campaign's resume state with it — so an absolute path is refused
+> outright rather than silently discarding results.
+
+**Campaigns are resumable.** Every row is written the moment it is measured, and a cell
+that already has rows is skipped, so an interrupted run keeps everything it finished and
+re-running continues where it stopped. The scan covers every CSV in the experiment's
+directory, not just today's, so a campaign split across days resumes correctly. `--fresh`
+runs everything again.
 
 ### Profiles
 
@@ -292,8 +312,9 @@ machines. The default is deliberately small enough to finish on a modest laptop.
 | Profile | Records | Clients | Warmup | Window | Reps | Real-corpus files | Rough runtime |
 |---------|---------|---------|--------|--------|------|-------------------|---------------|
 | `smoke` | 1 000 | 2 | 2 s | 5 s | 1 | 1 | ~1 min |
-| `small` (default) | 20 000 | 4 | 5 s | 20 s | 3 | 3 | ~10 min |
-| `full` | 200 000 | 8 | 10 s | 60 s | 5 | all | hours |
+| `small` | 20 000 | 4 | 5 s | 20 s | 3 | 3 | ~10 min |
+| `medium` (default) | 100 000 | 6 | 10 s | 40 s | 3 | 10 | hours |
+| `full` | 200 000 | 8 | 10 s | 60 s | 5 | all | many hours |
 
 `records` sizes the synthetic corpus. The real corpus is sized instead by how many of the
 43 yearly DATASUS CSVs to load, since its record count is fixed by the data.
@@ -314,8 +335,9 @@ path** rather than silently falling back to synthetic and mislabelling the resul
 ### Results
 
 Every experiment appends rows to `results/<experiment>/<experiment>_<profile>_<date>.csv`
-(git-ignored). **All four share one wide schema**, so the CSVs concatenate and filter
-cleanly in pandas:
+(git-ignored). **The four B-series experiments share one wide schema**, so their CSVs
+concatenate and filter cleanly in pandas. The S series has
+[a schema of its own](#reading-the-results); do not concatenate the two.
 
 ```python
 import pandas as pd, glob
@@ -336,6 +358,96 @@ Columns worth knowing:
 
 Columns that do not apply to an experiment are left empty. Plotting and analysis are done
 separately — nothing in this repository reads the CSVs back.
+
+---
+
+## Sharding benchmarks (`shard-bench.sh`)
+
+Sharding gets an entrypoint of its own. It shares the neutral machinery with `bench.sh` —
+profiles, metrics, the load driver, the corpus builders — and nothing else: the B series is
+built around `read_target`, `read_mode` and `write_concern`, and all three are meaningless
+on single-node shards.
+
+```bash
+./shard-bench.sh s1                       # profile=medium, deployments sh1,sh4,sh8
+./shard-bench.sh s3 --profile smoke        # a few minutes, proves the pipeline
+./shard-bench.sh all --profile medium      # s1, s3, s4, s5
+```
+
+### The experiments
+
+| ID | Question it answers | Kind |
+|----|---------------------|------|
+| `s1` | What does applying one semantic operation cost, and how much data does it move between shards? | one-shot event |
+| `s2` | Once the evolution has unbalanced the cluster, what does it cost to put it back? | one-shot event, balancer on |
+| `s3` | What is naming the shard key in a filter worth, and what does it cost not to? | steady state |
+| `s4` | Does the rewrite's advantage over preprocess grow with the shard count? | steady state, mixed load |
+| `s5` | What does MellowDB's schemaless promise cost on a cluster? | one-shot event |
+
+`s2` has no sweep of its own: it rides along on `s1`'s core cells, because building a corpus
+is 99% of a cell's cost and `s2` measures a second thing about the state `s1` just created.
+`./shard-bench.sh all` therefore runs `s1 s3 s4 s5`, and `s2`'s rows appear anyway.
+
+### The shard key matrix
+
+S1 and S3 sweep six shard keys. The axis that matters is **how the key relates to semantic
+evolution**, not whether it is hashed or ranged:
+
+| | hashed | ranged |
+|---|--------|--------|
+| **`_id`** — a system field | control: copies scatter at random, nothing unbalances | declared negative control: ObjectId only grows, so everything lands in the last chunk |
+| **a data field** the operations never touch | the realistic production choice | the realistic choice, plus whatever skew the data has |
+| **the field that evolves** | the copies move | the copies move, and skew concentrates them |
+
+`_id` is the control the other two rows are read against: `split_processed_records` unsets
+`_id` before the `$merge`, so every copy is born with a fresh one and lands wherever it
+hashes.
+
+### Options beyond `bench.sh`'s
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `--chunk-size-mb <n>` | `1` | Cluster-wide chunk size |
+
+**1 MB is an experimental condition, not a production default.** MongoDB's built-in 128 MB
+makes the balancer inert at any corpus size this campaign can afford — a measured run of
+four chunks holding 956 KB produced zero migrations — so `s2` would report a cluster that
+never needed rebalancing. Say so in anything published from these numbers.
+
+### Reading the results
+
+The S series writes **its own CSV schema**, disjoint from the B series': one wide schema
+covering both would leave every row of each half empty.
+
+| Column | Meaning |
+|--------|---------|
+| `shards` | 1, 4 or 8 |
+| `shard_key_role` / `shard_key_kind` | `id` / `data` / `evolved`, and `hashed` / `ranged` |
+| `skew` | Zipf exponent of the synthetic corpus. Also the coverage axis: at a 20-value domain the most frequent value covers 6% at skew 0, 46% at 1.5 and 83% at 3.0 — the range DATASUS's `cid` sits in |
+| `dist_before` / `dist_after` | Documents per shard as JSON, every shard listed. The raw datum the rest derives from |
+| `imbalance_before` / `imbalance_after` | Heaviest shard over a fair share. 1.0 is perfect, and the shard count is the worst possible |
+| `docs_relocated` | Copies that landed on a shard other than the one their original sits on |
+| `jumbo_chunks` | Chunks too large for MongoDB to move |
+| `chunks_moved` / `bytes_moved` / `converge_s` | What rebalancing cost (`s2`) |
+| `shards_touched` | How many shards a query reached, from the query planner (`s3`) |
+
+Two things that will trip up the analysis:
+
+- **There is no `coverage` column.** A uniform corpus cannot honour a requested coverage —
+  every value covers about 1/cardinality of it — so asking for 80% of a 20-value domain
+  touches 6%. What an operation really touched is `docs_written / docs_before`.
+- **`skew` collides with `DataFrame.skew()`.** `f.skew == 3.0` compares a method and
+  silently matches nothing. Use `f['skew']`.
+
+### What the numbers cannot say yet
+
+- **`smoke` cannot measure `s2`.** A 1000-record corpus is around 350 KB, below the 1 MB
+  chunk size, so there is nothing to rebalance and every cell reports zero migrations. It
+  proves the pipeline, not the measurement.
+- **`docs_relocated` is a coin flip per cell, not a rate.** A translation sends every copy
+  to the one shard its new value routes to, so a single repetition says only whether that
+  shard happened to be the origin. Each repetition draws a different corpus; read the
+  repetitions together.
 
 ---
 
@@ -404,11 +516,14 @@ Start a sharded cluster first (way 4 above). Two environment variables decide wh
 MONGO_HOST=mongodb://localhost:27017 MELLOW_SHARD_KEY='{"_id": "hashed"}' \
     uv run pytest semantic_heterogeneous_database/tests -v
 
-# The cluster-only tests
+# The cluster-only tests: the library's, and the sharding harness's
 MELLOW_SHARDED=1 MONGO_HOST=mongodb://localhost:27017 \
     uv run pytest semantic_heterogeneous_database/tests/test_sharding.py \
                   semantic_heterogeneous_database/tests/test_split_materialization.py \
-                  semantic_heterogeneous_database/tests/test_sharded_placement.py -v
+                  semantic_heterogeneous_database/tests/test_sharded_placement.py \
+                  benchmarks/tests/test_sharding_metrics.py \
+                  benchmarks/tests/test_cell_setup.py \
+                  benchmarks/tests/test_experiment_s5.py -v
 ```
 
 The Compose stacks themselves are tested by bringing each one up under its own project name
@@ -447,7 +562,7 @@ uv run python -m mellow_cli destroy --deployment rs3 --db mortality --yes   # dr
 
 | Command | Effect |
 |---------|--------|
-| `up --deployment single\|rs3\|rs5\|sh4\|sh8` | compose up + wait + connect (on `sh4`/`sh8`, waits until every shard is registered) |
+| `up --deployment single\|rs3\|rs5\|sh1\|sh4\|sh8` | compose up + wait + connect (on the sharded stacks, waits until every shard is registered) |
 | `connect` / `shell` | attach to a running deployment (no Docker touch) |
 | `load <folder> [date_field]` | bulk-load a folder of CSVs (REPL); one-shot: `load <folder> --date-field RefDate` |
 | `operations <file>` | apply a `;`-delimited operations CSV |
@@ -456,7 +571,7 @@ uv run python -m mellow_cli destroy --deployment rs3 --db mortality --yes   # dr
 | `drop --yes` | drop the database, keep Docker running |
 | `destroy --yes` | drop the database **and** `docker compose down -v` |
 
-On `sh4` / `sh8` the CLI connects to the router on port `27017` (it does not read
+On `sh1` / `sh4` / `sh8` the CLI connects to the router on port `27017` (it does not read
 `MONGOS_HOST_PORT`) and has no shard key option: collections it creates are not sharded and
 live whole on the database's primary shard. A collection already sharded through the library
 is discovered and used as is.
@@ -513,22 +628,32 @@ semantic_heterogeneous_database/   # MellowDB library
   sharding.py                      #   shard key, mongos detection, idempotent shardCollection, placement
   tests/                           #   unit tests (any MongoDB topology)
 
-bench.sh                           # benchmark entrypoint — needs only Docker + bash
+bench.sh                           # replication benchmarks — needs only Docker + bash
+shard-bench.sh                     # sharding benchmarks — same requirements
 
 benchmarks/                        # research scripts that use the library
   harness/                         #   the benchmark harness
-    profiles.py                    #     smoke/small/full sizing
+    profiles.py                    #     smoke/small/medium/full sizing
     topology.py                    #     deployment → compose file + in-network node URIs
     corpus.py                      #     synthetic and real DATASUS corpora
     workload.py                    #     concurrent load driver (warmup + fixed window)
     metrics.py                     #     throughput and latency percentiles
-    results.py                     #     shared wide CSV schema and writer
-    runner.py                      #     shared experiment plumbing
+    results.py                     #     the two CSV schemas and the writer
+    resume.py                      #     which cells of a campaign already ran
+    runner.py                      #     B-series plumbing (read targets, write concern)
+    shard_runner.py                #     S-series plumbing (shard keys, chunk size)
+    sharding_metrics.py            #     distribution, relocation, jumbo chunks, balancer
+    cell_setup.py                  #     shard key matrix, pre-split, pre-flight guard
   experiments/                     #   one module per experiment
     b1_read_offloading.py          #     B1 — read offloading throughput
     b3_write_replication.py        #     B3 — write cost of replication
     b4_strategy_distribution.py    #     B4 — strategy × distribution
     b6_chain_depth.py              #     B6 — version-chain depth
+    s1_operation_cost.py           #     S1 — cost of one semantic operation
+    s2_rebalance.py                #     S2 — cost of rebalancing afterwards
+    s3_targeting.py                #     S3 — targeted queries vs broadcast
+    s4_crossover_scale.py          #     S4 — strategy crossover across scale
+    s5_schemaless.py               #     S5 — the price of being schemaless
   simulations.py                   #   older single-node benchmark CLI
   database_generator.py            #   synthetic records + operations (fields evo0.., f0..)
   bench_utils.py                   #   write-concern helpers
@@ -548,6 +673,7 @@ analysis/                          # scripts that generate the paper figures
 docker-compose.yml                 # way 2 — single node
 docker-compose.replicaset.yml      # way 3 — 3-node replica set
 docker-compose.replicaset5.yml     # way 3 — 5-node replica set
+docker-compose.shard1.yml          # way 4 — 1-shard cluster (the scale intercept)
 docker-compose.shard4.yml          # way 4 — 4-shard cluster
 docker-compose.shard8.yml          # way 4 — 8-shard cluster
 pyproject.toml                     # dependencies and pytest configuration
