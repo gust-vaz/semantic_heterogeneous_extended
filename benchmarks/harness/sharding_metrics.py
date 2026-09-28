@@ -28,10 +28,24 @@ def _entries(client, namespace):
     return []
 
 
+def _shard_names(client):
+    """Every shard registered with the cluster, empty off a cluster."""
+    return [entry["_id"] for entry in client["config"].shards.find({}, {"_id": 1})]
+
+
 def distribution(client, namespace):
-    """Live documents per shard. Orphans are excluded."""
-    return {entry["shardName"]: entry["numOwnedDocuments"]
-            for entry in _entries(client, namespace)}
+    """Live documents per shard, empty shards included. Orphans are excluded.
+
+    Every shard in the cluster appears, not only the ones holding data:
+    $shardedDataDistribution omits the empty ones, and an index computed over
+    the occupied shards alone calls a collection sitting entirely on one shard
+    of four perfectly balanced - 1.0 where the answer is 4.0. Measured on a
+    collection sharded by a ranged _id, which concentrates by construction.
+    """
+    counts = {name: 0 for name in _shard_names(client)}
+    counts.update({entry["shardName"]: entry["numOwnedDocuments"]
+                   for entry in _entries(client, namespace)})
+    return counts
 
 
 def orphans(client, namespace):
@@ -41,8 +55,10 @@ def orphans(client, namespace):
     the range deleter takes - so the cost of rebalancing reports them separately
     rather than hiding them.
     """
-    return {entry["shardName"]: entry["numOrphanedDocs"]
-            for entry in _entries(client, namespace)}
+    counts = {name: 0 for name in _shard_names(client)}
+    counts.update({entry["shardName"]: entry["numOrphanedDocs"]
+                   for entry in _entries(client, namespace)})
+    return counts
 
 
 def imbalance(dist):

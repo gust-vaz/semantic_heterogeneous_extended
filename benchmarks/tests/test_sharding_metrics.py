@@ -292,3 +292,32 @@ def test_convergence_is_not_declared_before_anything_happens(primary_uri):
         assert time.time() - started >= 5
     finally:
         set_balancer(client, False)
+
+
+@needs_cluster
+def test_a_collection_on_one_shard_reports_the_others_as_empty(primary_uri):
+    """$shardedDataDistribution omits shards holding nothing, and an imbalance
+    computed over the occupied ones alone calls a collection sitting entirely on
+    one shard of four perfectly balanced. A ranged _id concentrates by
+    construction, which is why it is kept as the matrix's negative control."""
+    from pymongo import MongoClient
+
+    from benchmarks.harness.sharding_metrics import distribution, imbalance
+
+    client = MongoClient(primary_uri)
+    shard_count = client["config"].shards.count_documents({})
+    if shard_count < 2:
+        pytest.skip("needs more than one shard")
+    client.drop_database("imbalance_probe")
+    client.admin.command("enableSharding", "imbalance_probe")
+    client["imbalance_probe"].create_collection("c")
+    client.admin.command("shardCollection", "imbalance_probe.c", key={"_id": 1})
+    client["imbalance_probe"]["c"].insert_many([{"n": i} for i in range(400)])
+
+    try:
+        dist = distribution(client, "imbalance_probe.c")
+        assert len(dist) == shard_count
+        assert sum(1 for count in dist.values() if count) == 1
+        assert imbalance(dist) == pytest.approx(shard_count)
+    finally:
+        client.drop_database("imbalance_probe")

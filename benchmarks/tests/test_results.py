@@ -77,9 +77,18 @@ def test_result_path_encodes_experiment_profile_and_date():
 
 def test_shard_schema_carries_the_sharding_axes():
     for column in ["shards", "shard_key_field", "shard_key_kind", "shard_key_role",
-                   "shard_key_cardinality", "skew", "coverage", "missing_fraction",
+                   "shard_key_cardinality", "skew", "missing_fraction",
                    "chunk_size_mb", "presplit_chunks", "balancer"]:
         assert column in SHARD_COLUMNS
+
+
+def test_the_shard_schema_has_no_coverage_column():
+    """Coverage is not an axis. On a synthetic corpus every value covers about
+    1/cardinality of it and skew is what moves that, so a requested coverage is
+    a number the corpus cannot honour: measured, asking for 80% of a uniform
+    corpus of domain 20 touched 6.3% of it. What the operation really touched is
+    recoverable as docs_written / docs_before, which the row already carries."""
+    assert "coverage" not in SHARD_COLUMNS
 
 
 def test_shard_schema_carries_the_event_measurements():

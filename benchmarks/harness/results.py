@@ -32,7 +32,7 @@ SHARD_COLUMNS = [
     "operation_mode",
     # sharding axes
     "shard_key_field", "shard_key_kind", "shard_key_role",
-    "shard_key_cardinality", "skew", "coverage", "missing_fraction",
+    "shard_key_cardinality", "skew", "missing_fraction",
     "chunk_size_mb", "presplit_chunks", "balancer",
     # one-shot event measurements (S1, S2, S5)
     "apply_s", "docs_before", "docs_after", "docs_written", "docs_relocated",
