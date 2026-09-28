@@ -37,7 +37,7 @@ All benchmark output goes to the git-ignored `results/` directory, so finished r
 clutter the repository.
 
 > Running the **experiments**? Skip straight to [Running benchmarks](#running-benchmarks).
-> `./bench.sh` covers replication (B1/B3/B4/B6) and `./shard-bench.sh` covers sharding
+> `./bench.sh` covers replication (B1/B2/B3/B4) and `./shard-bench.sh` covers sharding
 > (S1–S5); both provision the deployments themselves and need nothing but Docker and bash.
 
 ---
@@ -271,11 +271,11 @@ run the experiment in an in-network runner container → write the CSV → `comp
 | ID | Question it answers | Default deployments |
 |----|---------------------|---------------------|
 | `b1` | Does routing record reads to secondaries raise aggregate query throughput? Workers are assigned nodes round-robin, so reads genuinely fan out. | `single,rs3,rs5` |
-| `b3` | What does durability cost as the cluster grows? Insert-only, swept across write concerns `1 / majority / all`. | `single,rs3,rs5` |
-| `b4` | Does distribution change which strategy wins? Mixed read/write across `preprocess` vs `rewrite`. | `single,rs3,rs5` |
-| `b6` | How does query cost grow as semantic operations stack up (chain length 1→50)? | `single,rs3` |
+| `b2` | What does durability cost as the cluster grows? Insert-only, swept across write concerns `1 / majority / all`. | `single,rs3,rs5` |
+| `b3` | Does distribution change which strategy wins? Mixed read/write across `preprocess` vs `rewrite`. | `single,rs3,rs5` |
+| `b4` | How does query cost grow as semantic operations stack up (chain length 1→50)? | `single,rs3` |
 
-`./bench.sh all` runs `b1`, `b3`, `b6`, then `b4` (largest matrix last).
+`./bench.sh all` runs `b1`, `b2`, `b4`, then `b3` (largest matrix last).
 
 > `bench.sh` refuses `sh1` / `sh4` / `sh8`, and the B-series experiments refuse them too:
 > their central axes — `read_target`, `read_mode`, `write_concern` — mean nothing on
@@ -646,9 +646,9 @@ benchmarks/                        # research scripts that use the library
     cell_setup.py                  #     shard key matrix, pre-split, pre-flight guard
   experiments/                     #   one module per experiment
     b1_read_offloading.py          #     B1 — read offloading throughput
-    b3_write_replication.py        #     B3 — write cost of replication
-    b4_strategy_distribution.py    #     B4 — strategy × distribution
-    b6_chain_depth.py              #     B6 — version-chain depth
+    b2_write_replication.py        #     B2 — write cost of replication
+    b3_strategy_distribution.py    #     B3 — strategy × distribution
+    b4_chain_depth.py              #     B4 — version-chain depth
     s1_operation_cost.py           #     S1 — cost of one semantic operation
     s2_rebalance.py                #     S2 — cost of rebalancing afterwards
     s3_targeting.py                #     S3 — targeted queries vs broadcast

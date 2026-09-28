@@ -1,4 +1,4 @@
-"""B4 - Strategy x distribution.
+"""B3 - Strategy x distribution.
 
 Does distribution change which strategy wins? Replication makes preprocess's
 insert-time burst costlier, while read offloading relieves rewrite's query-time
@@ -13,7 +13,7 @@ from benchmarks.harness import results, resume, runner, topology
 from benchmarks.harness.profiles import get_profile
 from benchmarks.harness.workload import run_workload
 
-EXPERIMENT = "b4"
+EXPERIMENT = "b3"
 OPERATION_MODES = ["preprocess", "rewrite"]
 MIXES = {"read_heavy": 0.95, "write_heavy": 0.05}
 READ_TARGETS = ["primary", "secondaries"]

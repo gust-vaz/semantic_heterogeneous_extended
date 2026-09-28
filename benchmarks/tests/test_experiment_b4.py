@@ -1,40 +1,33 @@
 import pandas as pd
-from benchmarks.experiments import b4_strategy_distribution as b4
+from benchmarks.experiments import b4_chain_depth as b4
 from benchmarks.harness.results import COLUMNS
 
 
-def test_mixes_are_read_ratios():
-    assert b4.MIXES == {"read_heavy": 0.95, "write_heavy": 0.05}
+def test_chain_lengths_span_one_to_fifty():
+    assert b4.CHAIN_LENGTHS == [1, 5, 10, 25, 50]
 
 
-def test_single_node_contributes_four_cells():
-    # 2 modes x 1 read target x 2 mixes
-    assert len(b4.cells("single")) == 4
+def test_both_strategies_are_swept():
+    assert b4.OPERATION_MODES == ["preprocess", "rewrite"]
 
 
-def test_replica_set_contributes_eight_cells():
-    # 2 modes x 2 read targets x 2 mixes
-    assert len(b4.cells("rs3")) == 8
-    assert ("preprocess", "secondaries", "read_heavy") in b4.cells("rs3")
+def test_cells_are_the_cross_product():
+    assert len(b4.cells("rs3")) == 10
+    assert (1, "preprocess") in b4.cells("rs3")
 
 
-def test_single_source_target_is_not_swept():
-    assert all(target != "secondaries_single_source"
-               for _, target, _ in b4.cells("rs3"))
-
-
-def test_b4_reports_both_read_and_write_latencies(tmp_path, primary_uri, monkeypatch):
+def test_b4_smoke_run_reduces_the_chain_sweep(tmp_path, primary_uri, monkeypatch):
     monkeypatch.setenv("BENCH_PRIMARY_URI", primary_uri)
     exit_code = b4.main([
         "--deployment", "single", "--profile", "smoke",
         "--out", str(tmp_path), "--records", "50",
-        "--mix", "read_heavy",
+        "--chain-lengths", "1,5",
     ])
     assert exit_code == 0
 
     frame = pd.read_csv(list(tmp_path.rglob("b4_smoke_*.csv"))[0])
     assert list(frame.columns) == COLUMNS
-    assert len(frame) == 2                       # 2 modes x 1 target x 1 mix x 1 rep
-    assert frame["mix"].unique().tolist() == ["read_heavy"]
-    assert (frame["setup_insert_s"] > 0).all()
+    assert len(frame) == 4                       # 2 chain lengths x 2 modes x 1 rep
+    assert sorted(frame["chain_length"].unique()) == [1, 5]
     assert sorted(frame["operation_mode"].unique()) == ["preprocess", "rewrite"]
+    assert (frame["setup_operations_s"] > 0).all()

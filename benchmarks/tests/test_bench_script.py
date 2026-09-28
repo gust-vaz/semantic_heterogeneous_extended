@@ -18,7 +18,7 @@ def test_script_exists_and_is_executable():
 def test_help_lists_every_experiment_and_exits_zero():
     done = subprocess.run(["bash", SCRIPT, "--help"], capture_output=True, text=True)
     assert done.returncode == 0
-    for token in ["b1", "b3", "b4", "b6", "all", "--profile", "--deployments",
+    for token in ["b1", "b2", "b3", "b4", "all", "--profile", "--deployments",
                   "--keep-going", "--corpus"]:
         assert token in done.stdout
 
@@ -37,7 +37,7 @@ def test_missing_experiment_argument_fails():
 def test_default_deployment_sweeps_match_the_spec():
     text = _read()
     assert re.search(r"b1\)\s*echo\s+\"single,rs3,rs5\"", text)
-    assert re.search(r"b6\)\s*echo\s+\"single,rs3\"", text)
+    assert re.search(r"b4\)\s*echo\s+\"single,rs3\"", text)
 
 
 def test_script_passes_the_git_sha_into_the_container():

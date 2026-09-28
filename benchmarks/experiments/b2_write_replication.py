@@ -1,4 +1,4 @@
-"""B3 - Write cost of replication.
+"""B2 - Write cost of replication.
 
 What does durability cost as the cluster grows? Insert-only workload swept
 across write concerns and node counts. The corpus is rebuilt per repetition
@@ -13,7 +13,7 @@ from benchmarks.harness import results, resume, runner, topology
 from benchmarks.harness.profiles import get_profile
 from benchmarks.harness.workload import run_workload
 
-EXPERIMENT = "b3"
+EXPERIMENT = "b2"
 OPERATION_MODE = "preprocess"
 WRITE_CONCERNS = ["1", "majority", "all"]
 CHAIN_LENGTH = 0
@@ -28,7 +28,7 @@ def cells(_deployment):
     """Every deployment sweeps the same write concerns.
 
     The unused argument keeps the cells() signature identical across all four
-    experiment modules; only B1 and B4 vary their sweep by deployment.
+    experiment modules; only B1 and B3 vary their sweep by deployment.
     """
     return list(WRITE_CONCERNS)
 

@@ -1,4 +1,4 @@
-"""B6 - Version-chain depth.
+"""B4 - Version-chain depth.
 
 How does query cost grow as semantic operations stack up, and does the strategy
 change the shape of that growth? Read-only workload over corpora built with
@@ -12,7 +12,7 @@ from benchmarks.harness import results, resume, runner, topology
 from benchmarks.harness.profiles import get_profile
 from benchmarks.harness.workload import run_workload
 
-EXPERIMENT = "b6"
+EXPERIMENT = "b4"
 CHAIN_LENGTHS = [1, 5, 10, 25, 50]
 OPERATION_MODES = ["preprocess", "rewrite"]
 WRITE_CONCERN = "majority"
@@ -27,7 +27,7 @@ def cells(_deployment, chain_lengths=None):
     """Cross product of chain length and strategy.
 
     The unused deployment argument keeps the cells() signature identical across
-    all four experiment modules; only B1 and B4 vary their sweep by deployment.
+    all four experiment modules; only B1 and B3 vary their sweep by deployment.
     """
     lengths = chain_lengths or CHAIN_LENGTHS
     return [(length, mode) for length in lengths for mode in OPERATION_MODES]

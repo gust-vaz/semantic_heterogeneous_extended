@@ -20,10 +20,10 @@ Usage: ./bench.sh <experiment> [options]
 
 Experiments:
   b1    Read offloading throughput      (default deployments: single,rs3,rs5)
-  b3    Write cost of replication       (default deployments: single,rs3,rs5)
-  b4    Strategy x distribution         (default deployments: single,rs3,rs5)
-  b6    Version-chain depth             (default deployments: single,rs3)
-  all   Run b1, b3, b6 then b4
+  b2    Write cost of replication       (default deployments: single,rs3,rs5)
+  b3    Strategy x distribution         (default deployments: single,rs3,rs5)
+  b4    Version-chain depth             (default deployments: single,rs3)
+  all   Run b1, b2, b4 then b3
 
 Options:
   --profile <smoke|small|medium|full>
@@ -49,9 +49,9 @@ compose_file_for() {
 module_for() {
   case "$1" in
     b1) echo "benchmarks.experiments.b1_read_offloading" ;;
-    b3) echo "benchmarks.experiments.b3_write_replication" ;;
-    b4) echo "benchmarks.experiments.b4_strategy_distribution" ;;
-    b6) echo "benchmarks.experiments.b6_chain_depth" ;;
+    b2) echo "benchmarks.experiments.b2_write_replication" ;;
+    b3) echo "benchmarks.experiments.b3_strategy_distribution" ;;
+    b4) echo "benchmarks.experiments.b4_chain_depth" ;;
     *)  echo "Unknown experiment '$1'" >&2; return 1 ;;
   esac
 }
@@ -59,9 +59,9 @@ module_for() {
 default_deployments_for() {
   case "$1" in
     b1) echo "single,rs3,rs5" ;;
+    b2) echo "single,rs3,rs5" ;;
     b3) echo "single,rs3,rs5" ;;
-    b4) echo "single,rs3,rs5" ;;
-    b6) echo "single,rs3" ;;
+    b4) echo "single,rs3" ;;
     *)  echo "Unknown experiment '$1'" >&2; return 1 ;;
   esac
 }
@@ -167,7 +167,7 @@ case "$OUT_DIR" in
 esac
 
 if [ "$EXPERIMENT" = "all" ]; then
-  EXPERIMENTS="b1 b3 b6 b4"
+  EXPERIMENTS="b1 b2 b4 b3"
 else
   module_for "$EXPERIMENT" >/dev/null   # validates the name, exits 1 if unknown
   EXPERIMENTS="$EXPERIMENT"
