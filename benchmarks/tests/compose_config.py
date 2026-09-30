@@ -25,7 +25,7 @@ def resolved(compose, profiles=(), **env):
     a value exported in the developer's shell cannot leak into a default-value test.
     """
     base = {k: v for k, v in os.environ.items()
-            if k not in ("MONGO_CACHE_GB", "MONGOS_HOST_PORT")}
+            if k not in ("MONGO_CACHE_GB", "MONGOS_HOST_PORT", "CONFIG_HOST")}
     base.update({k: v for k, v in env.items() if v is not None})
     cmd = ["docker", "compose", "-f", compose]
     for profile in profiles:

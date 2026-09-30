@@ -1,0 +1,23 @@
+# The control VM: config server + router. CONFIG_HOST is this VM's own routable
+# address (private IP:27019), the address the router hands the config replica set.
+# Host networking mirrors the shard VMs so every mongod is reachable by private IP.
+services:
+  cfg:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: mongod --configsvr --replSet cfg --bind_ip_all --port 27019 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    network_mode: host
+    ulimits:
+      nofile: { soft: 64000, hard: 64000 }
+    volumes:
+      - cfg-data:/data/db
+  mongos:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: mongos --configdb cfg/${CONFIG_HOST:?set CONFIG_HOST} --bind_ip_all --port 27017
+    network_mode: host
+    ulimits:
+      nofile: { soft: 64000, hard: 64000 }
+    depends_on: [cfg]
+volumes:
+  cfg-data:

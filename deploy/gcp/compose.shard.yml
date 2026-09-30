@@ -1,0 +1,16 @@
+# One shard mongod, for one VM. bind_ip_all so the router on another VM reaches
+# it; SHARD_NAME picks the replica set (shard1..shardN). Host networking makes it
+# reachable at the VM's private IP:27018 without Docker NAT - the multi-VM
+# analogue of the local bridge network.
+services:
+  shard:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: mongod --shardsvr --replSet ${SHARD_NAME:?set SHARD_NAME} --bind_ip_all --port 27018 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.25}
+    network_mode: host
+    ulimits:
+      nofile: { soft: 64000, hard: 64000 }
+    volumes:
+      - shard-data:/data/db
+volumes:
+  shard-data:
