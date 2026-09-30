@@ -111,6 +111,14 @@ def test_provision_dry_run_sh4_plans_four_shards(tmp_path):
     assert done.stdout.count("instances create") == 5
 
 
+def test_provision_dry_run_sh7_fits_the_eight_ip_trial_cap(tmp_path):
+    # 7 shards + 1 control = 8 VMs = 8 external IPs, the trial's IN_USE_ADDRESSES cap.
+    done = run("provision.sh", "sh7", "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.count("instances create") == 8
+    assert done.stdout.count("--machine-type=e2-small") == 7
+
+
 def test_provision_refuses_an_unknown_deployment(tmp_path):
     done = run("provision.sh", "rs3", "--dry-run", env=with_fake_gcloud(tmp_path))
     assert done.returncode != 0

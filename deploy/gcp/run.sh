@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$HERE/config.env"
 
-usage() { echo "Usage: ./run.sh <sh1|sh4|sh8> [--experiment s1..s5] [--profile smoke] [--dry-run]"; }
+usage() { echo "Usage: ./run.sh <sh1|sh4|sh7|sh8> [--experiment s1..s5] [--profile smoke] [--dry-run]"; }
 DRY_RUN=0; DEPLOYMENT=""; EXPERIMENT="s1"; PROFILE="smoke"
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -14,7 +14,7 @@ while [ $# -gt 0 ]; do
     --profile) PROFILE="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    sh1|sh4|sh8) DEPLOYMENT="$1"; shift ;;
+    sh1|sh4|sh7|sh8) DEPLOYMENT="$1"; shift ;;
     *) echo "Unknown option '$1'" >&2; usage >&2; exit 2 ;;
   esac
 done

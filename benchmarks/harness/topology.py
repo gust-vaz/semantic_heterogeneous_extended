@@ -61,6 +61,15 @@ DEPLOYMENTS = {
         "router": ("mongos", 27017),
         "shards": 8,
     },
+    # Cloud-only: 7 shards + 1 control = 8 VMs = 8 external IPs, exactly the free
+    # trial's IN_USE_ADDRESSES cap (which cannot be raised). No local compose ships.
+    "sh7": {
+        "compose": None,
+        "replica_set": None,
+        "nodes": [],
+        "router": ("mongos", 27017),
+        "shards": 7,
+    },
 }
 
 

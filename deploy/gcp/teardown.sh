@@ -6,14 +6,14 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$HERE/config.env"
 
-usage() { echo "Usage: ./teardown.sh <sh1|sh4|sh8> [--all] [--dry-run]"; }
+usage() { echo "Usage: ./teardown.sh <sh1|sh4|sh7|sh8> [--all] [--dry-run]"; }
 DRY_RUN=0; DEPLOYMENT=""; ALL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     --all) ALL=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    sh1|sh4|sh8) DEPLOYMENT="$1"; shift ;;
+    sh1|sh4|sh7|sh8) DEPLOYMENT="$1"; shift ;;
     *) echo "Unknown option '$1'" >&2; usage >&2; exit 2 ;;
   esac
 done
