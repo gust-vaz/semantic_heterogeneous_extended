@@ -178,8 +178,9 @@ def test_run_dry_run_sets_router_uri_and_calls_the_module(tmp_path):
     assert "benchmarks.experiments.s1_operation_cost" in out
     assert "--deployment sh4" in out
     assert "--profile smoke" in out
-    assert "BENCH_GIT_SHA" in out                     # provenance: git sha from the VM's clone
+    assert "BENCH_GIT_SHA" in out                     # provenance: git sha (computed locally)
     assert "compute scp" in out                      # brings results back
+    assert "results-cloud/sh4" in out                # per-deployment dest, no nesting across runs
 
 
 def test_run_passes_a_bounded_server_selection_timeout(tmp_path):

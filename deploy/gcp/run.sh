@@ -35,16 +35,24 @@ esac
 # wrong address into a fast failure instead of a hang.
 ROUTER="mongodb://localhost:27017/?serverSelectionTimeoutMS=10000"
 
+# Provenance sha computed here: the VM's clone is owned by root (cloned by the
+# startup-script), so `git rev-parse` over SSH trips git's dubious-ownership guard
+# and returns nothing. The local checkout is the same pushed commit the VM ran.
+GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '')"
+
 run gcloud compute ssh "$CONTROL" --zone="$GCP_ZONE" --command="\
   cd /opt/mellow/repo && \
-  BENCH_GIT_SHA=\$(git rev-parse --short HEAD 2>/dev/null || echo '') \
+  BENCH_GIT_SHA='${GIT_SHA}' \
   BENCH_ROUTER_URI='${ROUTER}' \
   docker run --rm --network host -e BENCH_ROUTER_URI -e BENCH_GIT_SHA \
     -v \$PWD:/app -w /app mongo-runner:local \
     python -m ${MODULE} --deployment ${DEPLOYMENT} --profile ${PROFILE} --out results"
 
-# Copy results back to the local checkout.
+# Copy results back into a per-deployment directory. Cleared first so a repeated
+# `scp --recurse` cannot nest (dest/results/...) or leave another deployment's rows.
+DEST="results-cloud/${DEPLOYMENT}"
+run rm -rf "$DEST"
 run gcloud compute scp --recurse --zone="$GCP_ZONE" \
-  "${CONTROL}:/opt/mellow/repo/results/" "./results-cloud/"
+  "${CONTROL}:/opt/mellow/repo/results" "$DEST"
 
-echo "Ran ${EXPERIMENT} on ${DEPLOYMENT}; results under ./results-cloud/"
+echo "Ran ${EXPERIMENT} on ${DEPLOYMENT}; results under ${DEST}/"
