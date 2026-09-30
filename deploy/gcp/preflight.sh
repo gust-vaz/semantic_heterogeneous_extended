@@ -41,7 +41,7 @@ else
 fi
 
 if [ -n "$PROJECT" ] && [ "$PROJECT" != "(unset)" ]; then
-  if gcloud beta billing projects describe "$PROJECT" \
+  if gcloud billing projects describe "$PROJECT" \
        --format="value(billingEnabled)" 2>/dev/null | grep -qi true; then
     pass "billing enabled"
   else
@@ -60,7 +60,9 @@ if [ -n "$DEPLOYMENT" ]; then
   shards="$(shard_count_for "$DEPLOYMENT")"
   needed=$((4 + shards * 2))   # n2-standard-4 control + e2-small shards (2 vCPU each)
   quota="$(gcloud compute regions describe "$GCP_REGION" \
-             --format="value(quotas.filter(\"metric=CPUS\").limit.firstof())" 2>/dev/null || echo 0)"
+             --flatten="quotas[]" \
+             --format="csv[no-heading](quotas.metric,quotas.limit)" 2>/dev/null \
+             | awk -F, '$1=="CPUS"{print $2}')"
   quota="${quota%.*}"
   if [ -n "$quota" ] && [ "$quota" -ge "$needed" ] 2>/dev/null; then
     pass "vCPU quota ($quota >= $needed for $DEPLOYMENT)"

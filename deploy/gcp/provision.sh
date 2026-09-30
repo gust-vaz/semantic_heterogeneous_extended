@@ -26,7 +26,9 @@ run() { if [ "$DRY_RUN" -eq 1 ]; then echo "+ $*"; else "$@"; fi; }
 if [ "$DRY_RUN" -eq 0 ]; then
   needed=$((4 + SHARDS * 2))
   quota="$(gcloud compute regions describe "$GCP_REGION" \
-            --format="value(quotas.filter(\"metric=CPUS\").limit.firstof())" 2>/dev/null || echo 0)"
+            --flatten="quotas[]" \
+            --format="csv[no-heading](quotas.metric,quotas.limit)" 2>/dev/null \
+            | awk -F, '$1=="CPUS"{print $2}')"
   quota="${quota%.*}"
   if ! { [ -n "$quota" ] && [ "$quota" -ge "$needed" ] 2>/dev/null; }; then
     echo "ERROR: vCPU quota in $GCP_REGION is ${quota:-0}, need $needed for $DEPLOYMENT." >&2

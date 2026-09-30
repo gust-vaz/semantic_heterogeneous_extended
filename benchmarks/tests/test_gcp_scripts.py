@@ -124,7 +124,7 @@ def test_provision_refuses_when_quota_is_short(tmp_path):
     stub.write_text(
         "#!/usr/bin/env bash\n"
         'case "$*" in\n'
-        '  *"regions describe"*) echo 4 ;;\n'
+        '  *"regions describe"*) echo "CPUS,4.0" ;;\n'   # flatten+csv output
         '  *"auth list"*) echo me@example.com ;;\n'
         '  *"config get-value project"*) echo proj ;;\n'
         '  *) echo "" ;;\n'
@@ -135,6 +135,29 @@ def test_provision_refuses_when_quota_is_short(tmp_path):
     done = run("provision.sh", "sh8", env=env)   # not dry-run: exercises the guard
     assert done.returncode != 0
     assert "quota" in (done.stdout + done.stderr).lower()
+
+
+def test_preflight_passes_with_a_ready_account(tmp_path):
+    # A realistic gcloud: authed, project set, billing True, compute enabled, and a
+    # 200-CPU region. Reproduces the parsing bugs (beta billing, quota firstof) that
+    # a bare-number stub hid: both must parse from real command output.
+    stub = tmp_path / "gcloud"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        '  *"auth list"*) echo me@example.com ;;\n'
+        '  *"config get-value project"*) echo proj ;;\n'
+        '  *"billing projects describe"*) echo True ;;\n'
+        '  *"services list"*) echo compute.googleapis.com ;;\n'
+        '  *"regions describe"*) echo "CPUS,200.0" ;;\n'
+        '  *) echo "" ;;\n'
+        'esac\n'
+        "exit 0\n")
+    stub.chmod(0o755)
+    env = dict(os.environ); env["PATH"] = f"{tmp_path}:{env['PATH']}"
+    done = run("preflight.sh", "--deployment", "sh8", env=env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "vCPU quota (200 >= 20" in done.stdout
 
 
 def test_init_cluster_dry_run_collects_ips_and_runs_the_init(tmp_path):
