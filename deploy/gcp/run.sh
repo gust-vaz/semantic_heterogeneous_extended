@@ -37,8 +37,9 @@ ROUTER="mongodb://localhost:27017/?serverSelectionTimeoutMS=10000"
 
 run gcloud compute ssh "$CONTROL" --zone="$GCP_ZONE" --command="\
   cd /opt/mellow/repo && \
+  BENCH_GIT_SHA=\$(git rev-parse --short HEAD 2>/dev/null || echo '') \
   BENCH_ROUTER_URI='${ROUTER}' \
-  docker run --rm --network host -e BENCH_ROUTER_URI \
+  docker run --rm --network host -e BENCH_ROUTER_URI -e BENCH_GIT_SHA \
     -v \$PWD:/app -w /app mongo-runner:local \
     python -m ${MODULE} --deployment ${DEPLOYMENT} --profile ${PROFILE} --out results"
 
