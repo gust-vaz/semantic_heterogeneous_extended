@@ -100,7 +100,7 @@ def test_provision_dry_run_sh8_plans_eight_shards_and_one_control(tmp_path):
     assert out.count("instances create") == 9          # 8 shard + 1 control
     assert "deployment=sh8" in out
     assert out.count("--machine-type=e2-small") == 8
-    assert out.count("--machine-type=n2-standard-4") == 1
+    assert out.count("--machine-type=e2-standard-4") == 1
     assert "firewall-rules create" in out
     assert "27017-27019" in out
 
