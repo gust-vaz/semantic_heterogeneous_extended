@@ -14,6 +14,24 @@ const SHARD_COUNT = parseInt(process.env.SHARD_COUNT || "4", 10);
 const NOT_YET_INITIALIZED = 94;
 const ALREADY_INITIALIZED = 23;
 
+// Addresses default to the Compose service names so a local stack is unchanged;
+// a multi-VM cloud cluster passes routable private IPs through the environment.
+const CONFIG_HOST = process.env.CONFIG_HOST || "cfg1:27019";
+const ROUTER_HOST = process.env.ROUTER_HOST || "mongos:27017";
+const SHARD_HOSTS = (process.env.SHARD_HOSTS || "")
+  .split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+
+// Fail before any connection: a short list would register the wrong shards.
+if (SHARD_HOSTS.length && SHARD_HOSTS.length !== SHARD_COUNT) {
+  print("ERROR: SHARD_HOSTS has " + SHARD_HOSTS.length +
+        " entries but SHARD_COUNT is " + SHARD_COUNT);
+  quit(1);
+}
+
+function shardAddress(i) {   // i is 1-based
+  return SHARD_HOSTS.length ? SHARD_HOSTS[i - 1] : ("shard" + i + ":27018");
+}
+
 function connect(address) {
   for (let attempt = 0; attempt < 60; attempt++) {
     try {
@@ -76,16 +94,16 @@ function addShard(router, spec) {
 }
 
 try {
-  const sets = [{ address: "cfg1:27019", name: "cfg", configServer: true }];
+  const sets = [{ address: CONFIG_HOST, name: "cfg", configServer: true }];
   for (let i = 1; i <= SHARD_COUNT; i++) {
-    sets.push({ address: "shard" + i + ":27018", name: "shard" + i, configServer: false });
+    sets.push({ address: shardAddress(i), name: "shard" + i, configServer: false });
   }
   for (const set of sets) initiate(set.address, set.name, set.configServer);
   for (const set of sets) waitForPrimary(set.address, set.name);
 
-  const router = connect("mongos:27017");
+  const router = connect(ROUTER_HOST);
   for (let i = 1; i <= SHARD_COUNT; i++) {
-    addShard(router, "shard" + i + "/shard" + i + ":27018");
+    addShard(router, "shard" + i + "/" + shardAddress(i));
   }
 
   const registered = router.getSiblingDB("config").shards.countDocuments({});

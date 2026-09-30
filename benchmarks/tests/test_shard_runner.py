@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from benchmarks.harness import shard_runner
@@ -112,3 +114,12 @@ def test_a_host_side_run_can_point_at_a_published_port(monkeypatch):
     probe run from the host needs somewhere else to point."""
     monkeypatch.setenv("BENCH_ROUTER_URI", "mongodb://localhost:27017")
     assert shard_runner.router_uri("sh4") == "mongodb://localhost:27017"
+
+
+def test_s1_resolves_the_cluster_through_the_router_hook():
+    # Regression: s1 called topology.write_uri directly, so BENCH_ROUTER_URI was
+    # ignored and a cloud run could not point at an external mongos. It must go
+    # through shard_runner.router_uri, which falls back to topology locally.
+    src = Path("benchmarks/experiments/s1_operation_cost.py").read_text()
+    assert "shard_runner.router_uri(" in src
+    assert "topology.write_uri(" not in src

@@ -7,11 +7,22 @@ anchor that looks like it applies to a service and does not. The slow test bring
 a stack up and checks the cluster it produces.
 """
 import os
+import shutil
 import subprocess
 
 import pytest
 
 from benchmarks.tests.compose_config import command, needs_docker, resolved
+
+
+@pytest.mark.skipif(shutil.which("mongosh") is None, reason="mongosh not available")
+def test_init_rejects_a_shard_host_list_that_does_not_match_shard_count():
+    # A short SHARD_HOSTS would otherwise register the wrong shards silently.
+    env = {**os.environ, "SHARD_COUNT": "4", "SHARD_HOSTS": "a:1,b:2"}
+    done = subprocess.run(["mongosh", "--nodb", "docker/sharded/init-sharded.js"],
+                          capture_output=True, text=True, env=env, timeout=30)
+    assert done.returncode != 0
+    assert "SHARD_HOSTS" in done.stdout
 
 COMPOSES = {"docker-compose.shard1.yml": 1,
             "docker-compose.shard4.yml": 4,
@@ -116,5 +127,44 @@ def test_stack_comes_up_as_a_cluster_and_init_can_be_rerun(compose_file, shards,
         again = run("run", "--rm", "mongo-init")
         assert again.returncode == 0, f"init not idempotent:\n{again.stdout}\n{again.stderr}"
         assert on_router('db.getSiblingDB("config").shards.countDocuments({})') == str(shards)
+    finally:
+        run("down", "-v", timeout=300)
+
+
+@needs_docker
+@pytest.mark.slow
+def test_init_registers_shards_at_addresses_from_the_environment():
+    """The env path is what the cloud uses: with SHARD_HOSTS/CONFIG_HOST set, the
+    shardAddress() env branch runs and still produces a healthy N-shard cluster.
+    Proven locally with the container service names (the only addresses that
+    resolve here), so no cloud is needed."""
+    compose = ["docker", "compose", "-p", "mellowtest-shenv",
+               "-f", "docker-compose.shard4.yml"]
+    env = {**os.environ, "MONGOS_HOST_PORT": "28119"}
+
+    def run(*args, timeout=300):
+        return subprocess.run([*compose, *args], capture_output=True, text=True,
+                              timeout=timeout, env=env)
+
+    def on_router(js):
+        r = run("exec", "-T", "mongos", "mongosh", "--quiet", "--eval", js)
+        assert r.returncode == 0, r.stderr
+        return r.stdout.strip().splitlines()[-1]
+
+    try:
+        assert run("up", "-d", timeout=600).returncode == 0
+        assert run("wait", "mongo-init", timeout=600).returncode == 0
+        hosts = "shard1:27018,shard2:27018,shard3:27018,shard4:27018"
+        again = run("run", "--rm",
+                    "-e", "SHARD_HOSTS=" + hosts,
+                    "-e", "CONFIG_HOST=cfg1:27019",
+                    "-e", "ROUTER_HOST=mongos:27017",
+                    "mongo-init")
+        assert again.returncode == 0, again.stdout + again.stderr
+        registered = on_router(
+            'db.getSiblingDB("config").shards.find().toArray()'
+            '.map(function(s){return s.host;}).join(";")')
+        assert "shard1:27018" in registered
+        assert "shard4:27018" in registered
     finally:
         run("down", "-v", timeout=300)
