@@ -242,7 +242,7 @@ def main(argv=None):
     out_path = results.result_path(args.out, EXPERIMENT, args.profile)
     done = shard_runner.already_done(args, EXPERIMENT, KEY_COLUMNS)
     anchor = cells(args.deployment, anchor_only=True)
-    written = skipped = 0
+    written = skipped = failed = 0
 
     for cell in cells(args.deployment):
         for repetition in range(profile["reps"]):
@@ -259,8 +259,17 @@ def main(argv=None):
             print(f"[{EXPERIMENT}] {args.deployment} / {cell['role']}-"
                   f"{cell['kind']} skew={cell['skew']} "
                   f"card={cell['cardinality']} rep={repetition}", flush=True)
-            row, handle = measure_cell(client, args, profile, cell,
-                                       repetition, mongo_version)
+            try:
+                row, handle = measure_cell(client, args, profile, cell,
+                                           repetition, mongo_version)
+            except RuntimeError as exc:
+                ## The pre-flight guard refuses a cell it cannot measure - a
+                ## corpus that would not spread, say. Skip it and keep the
+                ## campaign going rather than letting one bad cell abort every
+                ## cell after it; measure_cell has already dropped its corpus.
+                print(f"[{EXPERIMENT}] skipped (guard): {exc}", flush=True)
+                failed += 1
+                continue
             try:
                 shard_runner.emit(out_path, row)
                 written += 1
@@ -279,7 +288,7 @@ def main(argv=None):
                 corpus_module.drop_corpus(uri, handle)
 
     print(f"[{EXPERIMENT}] wrote {written} rows, skipped {skipped} already done,"
-          f" to {out_path}", flush=True)
+          f" {failed} failed the guard, to {out_path}", flush=True)
     return 0
 
 

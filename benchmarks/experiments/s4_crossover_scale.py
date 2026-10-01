@@ -57,7 +57,7 @@ def main(argv=None):
     matrix_cell = next(entry for entry in cell_setup.SHARD_KEY_MATRIX
                        if entry["role"] == SHARD_KEY["role"]
                        and entry["kind"] == SHARD_KEY["kind"])
-    written = skipped = 0
+    written = skipped = failed = 0
 
     cell_setup.prepare(client, args.chunk_size_mb, BALANCER)
 
@@ -115,10 +115,17 @@ def main(argv=None):
                     **shard_runner.summarize(result))
                 shard_runner.emit(out_path, row)
                 written += 1
+            except RuntimeError as exc:
+                ## The pre-flight guard refuses a cell it cannot measure. Skip it
+                ## and keep the campaign going rather than aborting the rest.
+                print(f"[{EXPERIMENT}] skipped (guard): {exc}", flush=True)
+                failed += 1
+                continue
             finally:
                 corpus_module.drop_corpus(uri, handle)
 
     print(f"[{EXPERIMENT}] wrote {written} rows, skipped {skipped} already done,"
+          f" {failed} failed the guard,"
           f" to {out_path}", flush=True)
     return 0
 

@@ -110,7 +110,7 @@ def main(argv=None):
     out_path = results.result_path(args.out, EXPERIMENT, args.profile)
     done = shard_runner.already_done(args, EXPERIMENT, KEY_COLUMNS)
     shard_count = topology.shard_count(args.deployment)
-    written = skipped = 0
+    written = skipped = failed = 0
 
     cell_setup.prepare(client, args.chunk_size_mb, BALANCER)
 
@@ -193,11 +193,17 @@ def main(argv=None):
                     **shard_runner.summarize(result))
                 shard_runner.emit(out_path, row)
                 written += 1
+        except RuntimeError as exc:
+            ## The pre-flight guard refuses a cell it cannot measure. Skip it and
+            ## keep the campaign going rather than aborting every cell after it.
+            print(f"[{EXPERIMENT}] skipped (guard): {exc}", flush=True)
+            failed += len(wanted)
+            continue
         finally:
             corpus_module.drop_corpus(uri, handle)
 
     print(f"[{EXPERIMENT}] wrote {written} rows, skipped {skipped}, "
-          f"to {out_path}", flush=True)
+          f"{failed} failed the guard, to {out_path}", flush=True)
     return 0
 
 

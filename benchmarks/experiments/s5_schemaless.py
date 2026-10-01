@@ -90,7 +90,7 @@ def main(argv=None):
     shard_count = topology.shard_count(args.deployment)
     field = FIELDS[SHARD_KEY["role"]]
     evolving = FIELDS["evolved"]
-    written = skipped = 0
+    written = skipped = failed = 0
 
     cell_setup.prepare(client, args.chunk_size_mb, BALANCER)
 
@@ -159,10 +159,17 @@ def main(argv=None):
                     mongo_version=mongo_version)
                 shard_runner.emit(out_path, row)
                 written += 1
+            except RuntimeError as exc:
+                ## The pre-flight guard refuses a cell it cannot measure. Skip it
+                ## and keep the campaign going rather than aborting the rest.
+                print(f"[{EXPERIMENT}] skipped (guard): {exc}", flush=True)
+                failed += 1
+                continue
             finally:
                 corpus_module.drop_corpus(uri, handle)
 
     print(f"[{EXPERIMENT}] wrote {written} rows, skipped {skipped} already done,"
+          f" {failed} failed the guard,"
           f" to {out_path}", flush=True)
     return 0
 
