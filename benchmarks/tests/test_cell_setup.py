@@ -1,7 +1,9 @@
 import os
 
 import pytest
+from pymongo.errors import OperationFailure
 
+from benchmarks.harness import cell_setup
 from benchmarks.harness.cell_setup import (
     SHARD_KEY_MATRIX, assert_distribution, expects_spread, key_pattern,
 )
@@ -9,6 +11,62 @@ from benchmarks.harness.cell_setup import (
 needs_cluster = pytest.mark.skipif(
     not os.environ.get("MELLOW_SHARDED"),
     reason="needs a mongos; set MELLOW_SHARDED=1 and point MONGO_HOST at it")
+
+
+class _FakeAdmin:
+    """Raises the given failure codes in order, then succeeds."""
+
+    def __init__(self, fail_codes):
+        self.fail_codes = list(fail_codes)
+        self.calls = 0
+
+    def command(self, *args, **kwargs):
+        self.calls += 1
+        if self.fail_codes:
+            raise OperationFailure("boom", self.fail_codes.pop(0))
+        return {"ok": 1}
+
+
+class _FakeClient:
+    def __init__(self, fail_codes):
+        self.admin = _FakeAdmin(fail_codes)
+
+
+CHUNK = {"min": {"k": 0}, "max": {"k": 10}}
+
+
+def test_move_chunk_retries_while_a_migration_is_still_settling(monkeypatch):
+    # On a real cluster the prior migration's range deletion outlives the
+    # moveChunk that triggered it, so the next moveChunk to an involved shard is
+    # refused with ConflictingOperationInProgress (117) until it clears. Local
+    # single-host Docker deletes instantly, so this only bit on the real cluster.
+    monkeypatch.setattr(cell_setup.time, "sleep", lambda _s: None)
+    client = _FakeClient([117, 117])          # refused twice, then succeeds
+    cell_setup.move_chunk(client, "db.c", CHUNK, "shard2")
+    assert client.admin.calls == 3
+
+
+def test_move_chunk_swallows_an_oversized_chunk(monkeypatch):
+    # A chunk bigger than the chunk size cannot move; counted elsewhere, not fatal.
+    monkeypatch.setattr(cell_setup.time, "sleep", lambda _s: None)
+    client = _FakeClient([cell_setup.CHUNK_TOO_BIG])
+    cell_setup.move_chunk(client, "db.c", CHUNK, "shard2")
+    assert client.admin.calls == 1           # swallowed, not retried
+
+
+def test_move_chunk_reraises_an_unexpected_failure(monkeypatch):
+    monkeypatch.setattr(cell_setup.time, "sleep", lambda _s: None)
+    client = _FakeClient([26])               # NamespaceNotFound, say
+    with pytest.raises(OperationFailure):
+        cell_setup.move_chunk(client, "db.c", CHUNK, "shard2")
+
+
+def test_move_chunk_gives_up_after_the_retry_budget(monkeypatch):
+    monkeypatch.setattr(cell_setup.time, "sleep", lambda _s: None)
+    client = _FakeClient([117] * 50)         # never clears
+    with pytest.raises(OperationFailure):
+        cell_setup.move_chunk(client, "db.c", CHUNK, "shard2", attempts=4)
+    assert client.admin.calls == 4
 
 
 def test_the_matrix_is_three_roles_by_two_kinds():

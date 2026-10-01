@@ -6,6 +6,8 @@ document sat on one shard, and every number looked plausible. A sharding
 measurement that does not check its own distribution first proves nothing.
 """
 
+import time
+
 from pymongo.errors import OperationFailure
 
 from benchmarks.harness import sharding_metrics
@@ -14,6 +16,36 @@ from benchmarks.harness import sharding_metrics
 #: single shard key value outgrows a chunk, which a skewed semantic key does by
 #: construction - the campaign counts those chunks rather than failing on them.
 CHUNK_TOO_BIG = 153
+
+#: moveChunk refused because a shard involved in it is still finishing a previous
+#: migration (its range deletion outlives the moveChunk that triggered it). On a
+#: real multi-VM cluster that cleanup takes seconds; on single-host Docker it is
+#: instant, so this only surfaced in the cloud. The move succeeds once it clears.
+CONFLICTING_OPERATION_IN_PROGRESS = 117
+
+
+def move_chunk(client, namespace, chunk, to, attempts=12, delay_s=5):
+    """Move one chunk, waiting out a migration still settling on an involved shard.
+
+    `_waitForDelete` makes each move wait for its own range deletion, and a retry
+    on ConflictingOperationInProgress rides out a previous move's cleanup. A chunk
+    bigger than the chunk size cannot move and is swallowed (counted elsewhere);
+    any other failure is real and raised.
+    """
+    for attempt in range(attempts):
+        try:
+            client.admin.command("moveChunk", namespace,
+                                 bounds=[chunk["min"], chunk["max"]],
+                                 to=to, _waitForDelete=True)
+            return
+        except OperationFailure as failure:
+            if failure.code == CHUNK_TOO_BIG:
+                return
+            if (failure.code == CONFLICTING_OPERATION_IN_PROGRESS
+                    and attempt < attempts - 1):
+                time.sleep(delay_s)
+                continue
+            raise
 
 #: The shard key matrix. The axis that matters is `role` - how the key relates
 #: to semantic evolution - not `kind`. `_id` never carries a data value, and
@@ -79,19 +111,10 @@ def presplit(client, namespace, field, points, shards):
     chunks = list(config.chunks.find({"uuid": entry["uuid"]})
                   .sort(f"min.{field}", 1))
     for index, chunk in enumerate(chunks):
-        try:
-            client.admin.command("moveChunk", namespace,
-                                 bounds=[chunk["min"], chunk["max"]],
-                                 to=shards[index % len(shards)])
-        except OperationFailure as failure:
-            ## A chunk larger than the chunk size cannot be moved, and a
-            ## boundary can only fall between distinct values - so a dominant
-            ## shard key value produces one by construction. That is a result
-            ## of this campaign, not a setup failure: it is counted by
-            ## sharding_metrics.oversized_chunks and recorded per cell. Any
-            ## other failure is a real one and still stops the cell.
-            if failure.code != CHUNK_TOO_BIG:
-                raise
+        ## move_chunk swallows an oversized chunk (counted elsewhere) and waits
+        ## out a migration still settling on an involved shard; any other failure
+        ## is real and stops the cell.
+        move_chunk(client, namespace, chunk, shards[index % len(shards)])
     return len(points)
 
 
