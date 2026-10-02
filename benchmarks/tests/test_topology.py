@@ -154,7 +154,7 @@ def test_rs5_compose_defines_a_runner_service():
     assert "mellow-rs5-net" in text
 
 
-SHARDED = {"sh4": 4, "sh8": 8}
+SHARDED = {"sh4": 4, "sh7": 7, "sh8": 8}
 
 
 class _NoProbing:
@@ -227,9 +227,9 @@ def test_sh1_has_no_secondaries_to_read_from():
     assert topology.secondary_uris("sh1") == []
 
 
-def test_sh7_is_a_cloud_only_seven_shard_deployment():
+def test_sh7_is_a_seven_shard_deployment():
     # 7 shards + 1 control = 8 VMs = 8 external IPs, exactly the trial's
-    # IN_USE_ADDRESSES cap. No local stack ships for it: it exists for the cloud.
+    # IN_USE_ADDRESSES cap, so the cloud sweep uses it in place of sh8.
     assert topology.is_sharded("sh7")
     assert topology.shard_count("sh7") == 7
-    assert topology.compose_file("sh7") is None
+    assert topology.compose_file("sh7") == "docker-compose.shard7.yml"

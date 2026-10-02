@@ -25,17 +25,17 @@ usage() {
 Usage: ./shard-bench.sh <experiment> [options]
 
 Experiments:
-  s1    Cost of applying a semantic operation  (default deployments: sh1,sh4,sh8)
+  s1    Cost of applying a semantic operation  (default deployments: sh1,sh4,sh7)
   s2    Cost of rebalancing afterwards         (rides along with s1)
-  s3    Targeted queries vs broadcast          (default deployments: sh1,sh4,sh8)
-  s4    Strategy crossover across scale        (default deployments: sh1,sh4,sh8)
-  s5    The price of being schemaless          (default deployments: sh1,sh4,sh8)
+  s3    Targeted queries vs broadcast          (default deployments: sh1,sh4,sh7)
+  s4    Strategy crossover across scale        (default deployments: sh1,sh4,sh7)
+  s5    The price of being schemaless          (default deployments: sh1,sh4,sh7)
   all   Run s1, s3, s4 then s5 (s2 rides along with s1)
 
 Options:
   --profile <smoke|small|medium|full>
                                  Sizing profile (default: medium)
-  --deployments <csv>            Override the sweep, e.g. sh4,sh8
+  --deployments <csv>            Override the sweep, e.g. sh4,sh7
   --corpus <synthetic|real>      Data source (default: synthetic)
   --out <dir>                    Output directory (default: results)
   --chunk-size-mb <n>            Cluster-wide chunk size (default: 1)
@@ -49,7 +49,7 @@ compose_file_for() {
   case "$1" in
     sh1) echo "docker-compose.shard1.yml" ;;
     sh4) echo "docker-compose.shard4.yml" ;;
-    sh8) echo "docker-compose.shard8.yml" ;;
+    sh7) echo "docker-compose.shard7.yml" ;;
     *)   echo "Unknown deployment '$1'" >&2; return 1 ;;
   esac
 }
@@ -67,7 +67,7 @@ module_for() {
 
 default_deployments_for() {
   case "$1" in
-    s1|s2|s3|s4|s5) echo "sh1,sh4,sh8" ;;
+    s1|s2|s3|s4|s5) echo "sh1,sh4,sh7" ;;
     *)  echo "Unknown experiment '$1'" >&2; return 1 ;;
   esac
 }
