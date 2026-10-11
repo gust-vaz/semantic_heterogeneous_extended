@@ -58,7 +58,7 @@ IPs; use `sh7` instead, or upgrade to a paid account (keeps the credit) and rais
 the quota. `sh4` runs the full OFAT matrix (43 cells for s1); `sh1` and `sh7` run
 the 6-cell core (the OFAT extensions are anchored on `sh4`).
 
-## Running the B-series on a real replica set
+## Running the B-series on a real replica set (and the single-node baseline)
 
 The same layer runs the replica-set read-offloading experiments (`b1`–`b4`) on a
 real multi-VM set: one `mongod` member per VM, plus a control VM that runs only
@@ -68,11 +68,18 @@ the primary's CPU and disk, so the effect being measured could not appear.
 
 | deployment | members | VMs | external IPs | fits the trial? |
 |---|---|---|---|---|
+| `single` | 1 (standalone) | 2 (1 node + control) | 2 | yes |
 | `rs3` | 3 | 4 (3 members + control) | 4 | yes |
 | `rs5` | 5 | 6 (5 members + control) | 6 | yes |
 
 The first member (member1) is pinned PRIMARY by a higher priority, so the write
 URI names the whole set and reads are offloaded to members 2..N.
+
+`single` is the 1-node baseline of this scale axis (single → rs3 → rs5), the
+B-series analogue of `sh1` for the S-series. Its one data VM runs a plain
+`mongod` (no replica set), so there is **no `init-replicaset.sh` step** and no
+secondary to offload reads to — it measures the single-node baseline. Everything
+else (provision, run, teardown) is identical; just skip step 3 below.
 
 ```bash
 DEP=rs3                                    # or rs5
