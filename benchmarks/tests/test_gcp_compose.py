@@ -12,6 +12,7 @@ from benchmarks.tests.compose_config import command, needs_docker, resolved
 CONTROL = "deploy/gcp/compose.control.yml"
 SHARD = "deploy/gcp/compose.shard.yml"
 MEMBER = "deploy/gcp/compose.member.yml"
+NODE = "deploy/gcp/compose.node.yml"
 
 
 @needs_docker
@@ -70,4 +71,28 @@ def test_member_raises_the_open_file_limit():
 def test_member_cache_is_raisable_without_editing():
     for env_value, expected in ((None, "0.5"), ("1.5", "1.5")):
         cmd = next(command(s) for s in resolved(MEMBER, MONGO_CACHE_GB=env_value).values())
+        assert f"--wiredTigerCacheSizeGB {expected}" in cmd
+
+
+@needs_docker
+def test_node_stack_is_a_single_standalone_mongod():
+    cmds = [command(s) for s in resolved(NODE).values()]
+    assert len(cmds) == 1
+    assert cmds[0].startswith("mongod ")
+    assert "--port 27017" in cmds[0]
+    assert "--replSet" not in cmds[0]      # standalone: no set to join
+    assert "--shardsvr" not in cmds[0]
+    assert "--configsvr" not in cmds[0]
+
+
+@needs_docker
+def test_node_raises_the_open_file_limit():
+    service = next(iter(resolved(NODE).values()))
+    assert service.get("ulimits", {}).get("nofile") == {"soft": 64000, "hard": 64000}
+
+
+@needs_docker
+def test_node_cache_is_raisable_without_editing():
+    for env_value, expected in ((None, "0.5"), ("1.5", "1.5")):
+        cmd = next(command(s) for s in resolved(NODE, MONGO_CACHE_GB=env_value).values())
         assert f"--wiredTigerCacheSizeGB {expected}" in cmd

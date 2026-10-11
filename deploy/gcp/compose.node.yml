@@ -1,0 +1,17 @@
+# One standalone mongod, for one VM - the single-node baseline of the B-series
+# scale axis (single -> rs3 -> rs5). No --replSet: it is not part of any set, so
+# there is nothing to initiate and no secondary to offload reads to. Host
+# networking makes it reachable at the VM's private IP, mirroring the member and
+# shard stacks.
+services:
+  node:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: mongod --bind_ip_all --port 27017 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.5}
+    network_mode: host
+    ulimits:
+      nofile: { soft: 64000, hard: 64000 }
+    volumes:
+      - node-data:/data/db
+volumes:
+  node-data:

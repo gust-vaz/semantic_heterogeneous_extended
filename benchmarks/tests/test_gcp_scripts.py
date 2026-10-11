@@ -80,6 +80,13 @@ def test_bootstrap_member_is_strict_and_runs_the_member_compose():
     assert "mongo-cache-gb" in text
 
 
+def test_bootstrap_node_is_strict_and_runs_the_node_compose():
+    text = read("bootstrap-node.sh")
+    assert "set -euo pipefail" in text
+    assert "compose.node.yml" in text
+    assert "mongo-cache-gb" in text
+
+
 SCRIPTS = ["preflight.sh", "provision.sh", "init-cluster.sh", "init-replicaset.sh",
            "run.sh", "teardown.sh", "stop.sh", "start.sh", "status.sh"]
 
