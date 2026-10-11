@@ -68,9 +68,20 @@ def test_config_rejects_an_unknown_deployment():
     assert "bogus" in done.stderr
 
 
-def test_member_machine_defaults_to_e2_small():
+def test_member_machine_matches_e2_small_resources_without_bursting():
+    # e2-small is 2 shared vCPUs / 2 GB and bursts on CPU credits: over a long run
+    # its throughput stepped down mid-experiment (B1/B2 rep drift). e2-highcpu-2 is
+    # the same 2 vCPU / 2 GB with dedicated cores.
     done = sourced('echo "$MEMBER_MACHINE"')
-    assert done.stdout.strip() == "e2-small"
+    assert done.stdout.strip() == "e2-highcpu-2"
+
+
+def test_data_and_control_machines_of_the_b_series_are_not_shared_core():
+    # The shared-core families are the burstable ones.
+    burstable = {"e2-micro", "e2-small", "e2-medium", "f1-micro", "g1-small"}
+    for var in ("MEMBER_MACHINE", "CONTROL_MACHINE"):
+        done = sourced(f'echo "${var}"')
+        assert done.stdout.strip() not in burstable, var
 
 
 def test_bootstrap_member_is_strict_and_runs_the_member_compose():
@@ -187,7 +198,7 @@ def test_provision_dry_run_rs3_plans_three_members_and_one_control(tmp_path):
     assert "compose-member=" in out
     assert "kind=replicaset" in out
     assert "deployment=rs3" in out
-    assert out.count("--machine-type=e2-small") == 3
+    assert out.count("--machine-type=e2-highcpu-2") == 3
     assert out.count("--machine-type=e2-standard-4") == 1
 
 

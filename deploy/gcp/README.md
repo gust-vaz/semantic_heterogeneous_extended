@@ -107,8 +107,12 @@ done
 ```
 
 Unlike `s2` (which needs `--profile medium` to see migrations), the B-series is
-meaningful at `smoke`. Members default to `e2-small`; raise `MEMBER_MACHINE` to
-`e2-medium` in `config.env` if a larger profile runs the members out of memory.
+meaningful at `smoke`. Members default to `e2-highcpu-2` (2 vCPU / 2 GB, dedicated
+cores). Do not use the shared-core types (`e2-micro`/`small`/`medium`) for timed
+runs: they burst on CPU credits, and a long experiment's throughput steps down
+mid-run, which shows up as a bias between cells run early and late. Raise
+`MEMBER_MACHINE` (e.g. `e2-standard-2`, 8 GB) in `config.env` if a larger profile
+runs the members out of memory.
 
 ## Start a cluster and run every experiment on it
 
