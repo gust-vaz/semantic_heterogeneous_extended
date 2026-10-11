@@ -9,14 +9,14 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$HERE/config.env"
 
-usage() { echo "Usage: ./provision.sh <sh1|sh4|sh7|sh8|rs3|rs5> [--dry-run]"; }
+usage() { echo "Usage: ./provision.sh <sh1|sh4|sh7|sh8|rs3|rs5|single> [--dry-run]"; }
 DRY_RUN=0
 DEPLOYMENT=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    sh1|sh4|sh7|sh8|rs3|rs5) DEPLOYMENT="$1"; shift ;;
+    sh1|sh4|sh7|sh8|rs3|rs5|single) DEPLOYMENT="$1"; shift ;;
     *) echo "Unknown option '$1'" >&2; usage >&2; exit 2 ;;
   esac
 done
@@ -72,21 +72,28 @@ run gcloud compute instances create "${NAME_PREFIX}-${DEPLOYMENT}-control" \
   --metadata-from-file=startup-script="$HERE/bootstrap-control.sh" \
   --metadata=repo-branch=cloud-addition,repo-url="${REPO_URL}",kind="${KIND}"
 
-# Data VMs: shard mongods or replica-set members.
+# Data VMs: shard mongods, replica-set members, or a single standalone node.
 for i in $(seq 1 "$DATA_COUNT"); do
-  if [ "$KIND" = shard ]; then
-    run gcloud compute instances create "${NAME_PREFIX}-${DEPLOYMENT}-shard${i}" \
-      --zone="$GCP_ZONE" --machine-type="$DATA_MACHINE" \
-      --subnet="${NET}-sub" --labels="${LABELS},role=shard" \
-      --metadata-from-file=startup-script="$HERE/bootstrap-shard.sh",compose-shard="$HERE/compose.shard.yml" \
-      --metadata=shard-name="shard${i}",mongo-cache-gb=0.5
-  else
-    run gcloud compute instances create "${NAME_PREFIX}-${DEPLOYMENT}-member${i}" \
-      --zone="$GCP_ZONE" --machine-type="$DATA_MACHINE" \
-      --subnet="${NET}-sub" --labels="${LABELS},role=member" \
-      --metadata-from-file=startup-script="$HERE/bootstrap-member.sh",compose-member="$HERE/compose.member.yml" \
-      --metadata=mongo-cache-gb=0.5
-  fi
+  case "$KIND" in
+    shard)
+      run gcloud compute instances create "${NAME_PREFIX}-${DEPLOYMENT}-shard${i}" \
+        --zone="$GCP_ZONE" --machine-type="$DATA_MACHINE" \
+        --subnet="${NET}-sub" --labels="${LABELS},role=shard" \
+        --metadata-from-file=startup-script="$HERE/bootstrap-shard.sh",compose-shard="$HERE/compose.shard.yml" \
+        --metadata=shard-name="shard${i}",mongo-cache-gb=0.5 ;;
+    replicaset)
+      run gcloud compute instances create "${NAME_PREFIX}-${DEPLOYMENT}-member${i}" \
+        --zone="$GCP_ZONE" --machine-type="$DATA_MACHINE" \
+        --subnet="${NET}-sub" --labels="${LABELS},role=member" \
+        --metadata-from-file=startup-script="$HERE/bootstrap-member.sh",compose-member="$HERE/compose.member.yml" \
+        --metadata=mongo-cache-gb=0.5 ;;
+    standalone)
+      run gcloud compute instances create "${NAME_PREFIX}-${DEPLOYMENT}-node${i}" \
+        --zone="$GCP_ZONE" --machine-type="$DATA_MACHINE" \
+        --subnet="${NET}-sub" --labels="${LABELS},role=node" \
+        --metadata-from-file=startup-script="$HERE/bootstrap-node.sh",compose-node="$HERE/compose.node.yml" \
+        --metadata=mongo-cache-gb=0.5 ;;
+  esac
 done
 
 echo "Provisioned $DEPLOYMENT ($KIND): $DATA_COUNT data VM(s) + 1 control."

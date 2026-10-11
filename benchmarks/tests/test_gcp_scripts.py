@@ -198,6 +198,19 @@ def test_provision_dry_run_rs5_plans_five_members(tmp_path):
     assert done.stdout.count("role=member") == 5
 
 
+def test_provision_dry_run_single_plans_one_node_and_one_control(tmp_path):
+    done = run("provision.sh", "single", "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    out = done.stdout
+    assert out.count("instances create") == 2           # 1 node + 1 control
+    assert out.count("role=node") == 1
+    assert "role=control" in out
+    assert "bootstrap-node.sh" in out
+    assert "compose-node=" in out
+    assert "kind=standalone" in out
+    assert "deployment=single" in out
+
+
 def test_provision_repins_ssh_to_the_current_ip(tmp_path):
     done = run("provision.sh", "sh4", "--dry-run", env=with_fake_gcloud(tmp_path))
     assert done.returncode == 0, done.stderr
