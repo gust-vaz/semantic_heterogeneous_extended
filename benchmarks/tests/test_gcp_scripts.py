@@ -161,9 +161,55 @@ def test_provision_dry_run_sh7_fits_the_eight_ip_trial_cap(tmp_path):
 
 
 def test_provision_refuses_an_unknown_deployment(tmp_path):
-    done = run("provision.sh", "rs3", "--dry-run", env=with_fake_gcloud(tmp_path))
+    done = run("provision.sh", "rs9", "--dry-run", env=with_fake_gcloud(tmp_path))
     assert done.returncode != 0
-    assert "rs3" in (done.stdout + done.stderr)
+    assert "rs9" in (done.stdout + done.stderr)
+
+
+def test_provision_dry_run_rs3_plans_three_members_and_one_control(tmp_path):
+    done = run("provision.sh", "rs3", "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    out = done.stdout
+    assert out.count("instances create") == 4           # 3 members + 1 control
+    assert out.count("role=member") == 3
+    assert "role=control" in out
+    assert "bootstrap-member.sh" in out
+    assert "compose-member=" in out
+    assert "kind=replicaset" in out
+    assert "deployment=rs3" in out
+    assert out.count("--machine-type=e2-small") == 3
+    assert out.count("--machine-type=e2-standard-4") == 1
+
+
+def test_provision_dry_run_rs5_plans_five_members(tmp_path):
+    done = run("provision.sh", "rs5", "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.count("instances create") == 6
+    assert done.stdout.count("role=member") == 5
+
+
+def test_provision_repins_ssh_to_the_current_ip(tmp_path):
+    done = run("provision.sh", "sh4", "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    update_line = next(l for l in done.stdout.splitlines()
+                       if "firewall-rules update" in l and "-ssh" in l)
+    assert "--source-ranges=" in update_line
+
+
+def test_provision_dry_run_shard_still_plans_shards_and_a_config_control(tmp_path):
+    # Regression: generalising to rs must not change the shard path.
+    done = run("provision.sh", "sh4", "--dry-run", env=with_fake_gcloud(tmp_path))
+    out = done.stdout
+    assert out.count("instances create") == 5
+    assert out.count("role=shard") == 4
+    assert "kind=shard" in out
+    assert "bootstrap-shard.sh" in out
+
+
+def test_bootstrap_control_starts_the_router_only_for_shards():
+    text = read("bootstrap-control.sh")
+    assert "compose.control.yml" in text
+    assert '"$KIND" = shard' in text
 
 
 def test_provision_refuses_when_quota_is_short(tmp_path):
