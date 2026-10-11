@@ -70,6 +70,13 @@ def test_member_machine_defaults_to_e2_small():
     assert done.stdout.strip() == "e2-small"
 
 
+def test_bootstrap_member_is_strict_and_runs_the_member_compose():
+    text = read("bootstrap-member.sh")
+    assert "set -euo pipefail" in text
+    assert "compose.member.yml" in text
+    assert "mongo-cache-gb" in text
+
+
 SCRIPTS = ["preflight.sh", "provision.sh", "init-cluster.sh",
            "run.sh", "teardown.sh", "stop.sh", "start.sh", "status.sh"]
 

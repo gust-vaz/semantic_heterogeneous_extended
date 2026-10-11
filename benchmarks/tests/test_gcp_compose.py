@@ -11,6 +11,7 @@ from benchmarks.tests.compose_config import command, needs_docker, resolved
 
 CONTROL = "deploy/gcp/compose.control.yml"
 SHARD = "deploy/gcp/compose.shard.yml"
+MEMBER = "deploy/gcp/compose.member.yml"
 
 
 @needs_docker
@@ -47,3 +48,26 @@ def test_shard_cache_is_raisable_without_editing():
                 if command(s).startswith("mongod ")]
         assert cmds
         assert all(f"--wiredTigerCacheSizeGB {expected}" in c for c in cmds)
+
+
+@needs_docker
+def test_member_stack_is_a_single_replset_mongod():
+    cmds = [command(s) for s in resolved(MEMBER).values()]
+    assert len(cmds) == 1
+    assert "--replSet rs0" in cmds[0]
+    assert "--port 27017" in cmds[0]
+    assert "--shardsvr" not in cmds[0]
+    assert "--configsvr" not in cmds[0]
+
+
+@needs_docker
+def test_member_raises_the_open_file_limit():
+    service = next(iter(resolved(MEMBER).values()))
+    assert service.get("ulimits", {}).get("nofile") == {"soft": 64000, "hard": 64000}
+
+
+@needs_docker
+def test_member_cache_is_raisable_without_editing():
+    for env_value, expected in ((None, "0.5"), ("1.5", "1.5")):
+        cmd = next(command(s) for s in resolved(MEMBER, MONGO_CACHE_GB=env_value).values())
+        assert f"--wiredTigerCacheSizeGB {expected}" in cmd

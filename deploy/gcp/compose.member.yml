@@ -1,0 +1,18 @@
+# One replica-set member mongod, for one VM. Each member is on its own VM, so
+# they all use 27017 without colliding; host networking makes the member
+# reachable at the VM's private IP - the multi-VM analogue of the local bridge
+# network. The set name is fixed (rs0) because every cloud replica set is rs0.
+# Members hold a full copy of the data, so the cache defaults higher than a
+# shard's (which holds only 1/N); raise it from the environment if memory bites.
+services:
+  member:
+    image: mongo:8.0.12
+    restart: unless-stopped
+    command: mongod --replSet rs0 --bind_ip_all --port 27017 --wiredTigerCacheSizeGB ${MONGO_CACHE_GB:-0.5}
+    network_mode: host
+    ulimits:
+      nofile: { soft: 64000, hard: 64000 }
+    volumes:
+      - member-data:/data/db
+volumes:
+  member-data:
