@@ -36,6 +36,40 @@ def with_fake_gcloud(tmp_path, exit_code=0, stdout=""):
     return env
 
 
+def sourced(expr):
+    """Evaluate a config.env helper the way the scripts do."""
+    done = subprocess.run(["bash", "-c", f"source {GCP}/config.env && {expr}"],
+                          capture_output=True, text=True)
+    return done
+
+
+def test_config_maps_deployment_kind_count_and_role():
+    def out(expr):
+        done = sourced(expr)
+        assert done.returncode == 0, done.stderr
+        return done.stdout.strip()
+    assert out("kind_for sh4") == "shard"
+    assert out("kind_for rs3") == "replicaset"
+    assert out("kind_for rs5") == "replicaset"
+    assert out("data_count_for rs3") == "3"
+    assert out("data_count_for rs5") == "5"
+    assert out("data_count_for sh4") == "4"
+    assert out("data_role_for rs5") == "member"
+    assert out("data_role_for sh4") == "shard"
+    assert out("shard_count_for sh8") == "8"   # kept as an alias
+
+
+def test_config_rejects_an_unknown_deployment():
+    done = sourced("kind_for bogus")
+    assert done.returncode != 0
+    assert "bogus" in done.stderr
+
+
+def test_member_machine_defaults_to_e2_small():
+    done = sourced('echo "$MEMBER_MACHINE"')
+    assert done.stdout.strip() == "e2-small"
+
+
 SCRIPTS = ["preflight.sh", "provision.sh", "init-cluster.sh",
            "run.sh", "teardown.sh", "stop.sh", "start.sh", "status.sh"]
 
