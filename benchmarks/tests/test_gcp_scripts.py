@@ -369,6 +369,31 @@ def test_run_shard_path_is_unchanged(tmp_path):
     assert "BENCH_PRIMARY_URI" not in out
 
 
+def test_run_dry_run_single_b1_is_a_direct_connection_with_no_secondaries(tmp_path):
+    done = run("run.sh", "single", "--experiment", "b1", "--dry-run",
+               env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    out = done.stdout
+    assert "BENCH_PRIMARY_URI=" in out
+    assert "directConnection=true" in out
+    assert "replicaSet=rs0" not in out           # standalone: not a set
+    assert "benchmarks.experiments.b1_read_offloading" in out
+    assert "--deployment single" in out
+    assert "results-cloud/single" in out
+    assert "serverSelectionTimeoutMS" in out
+    assert "BENCH_ROUTER_URI" not in out
+    # A single node has no secondary to offload reads to: the override is left
+    # unset entirely (resolve_endpoints then reads no secondaries), not set to a
+    # copy of the primary.
+    assert "BENCH_SECONDARY_URIS" not in out
+    assert out.count("directConnection=true") == 1   # only the primary URI
+
+
+def test_run_single_defaults_to_b1(tmp_path):
+    out = run("run.sh", "single", "--dry-run", env=with_fake_gcloud(tmp_path)).stdout
+    assert "b1_read_offloading" in out
+
+
 def test_teardown_dry_run_deletes_named_vms_not_by_filter(tmp_path):
     done = run("teardown.sh", "sh8", "--dry-run", env=with_fake_gcloud(tmp_path))
     assert done.returncode == 0, done.stderr

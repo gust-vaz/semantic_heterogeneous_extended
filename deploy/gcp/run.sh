@@ -9,7 +9,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$HERE/config.env"
 
-usage() { echo "Usage: ./run.sh <sh1|sh4|sh7|sh8|rs3|rs5> [--experiment s1..s5|b1..b4] [--profile smoke] [--dry-run]"; }
+usage() { echo "Usage: ./run.sh <sh1|sh4|sh7|sh8|rs3|rs5|single> [--experiment s1..s5|b1..b4] [--profile smoke] [--dry-run]"; }
 DRY_RUN=0
 DEPLOYMENT=""
 EXPERIMENT=""
@@ -20,7 +20,7 @@ while [ $# -gt 0 ]; do
     --profile) PROFILE="$2"; shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    sh1|sh4|sh7|sh8|rs3|rs5) DEPLOYMENT="$1"; shift ;;
+    sh1|sh4|sh7|sh8|rs3|rs5|single) DEPLOYMENT="$1"; shift ;;
     *) echo "Unknown option '$1'" >&2; usage >&2; exit 2 ;;
   esac
 done
@@ -62,7 +62,7 @@ if [ "$KIND" = shard ]; then
     docker run --rm --network host -e BENCH_ROUTER_URI -e BENCH_GIT_SHA \
       -v \$PWD:/app -w /app mongo-runner:local \
       python -m ${MODULE} --deployment ${DEPLOYMENT} --profile ${PROFILE} --out results"
-else
+elif [ "$KIND" = replicaset ]; then
   # Replica-set members run on their own VMs. The write URI names the whole set
   # (so writes follow an election); the read URIs are pinned to the secondaries,
   # members 2..N (member1 leads by priority). A bounded selection timeout fails
@@ -86,6 +86,27 @@ else
     BENCH_PRIMARY_URI='${PRIMARY_URI}' \
     BENCH_SECONDARY_URIS='${SECONDARY_URIS}' \
     docker run --rm --network host -e BENCH_PRIMARY_URI -e BENCH_SECONDARY_URIS -e BENCH_GIT_SHA \
+      -v \$PWD:/app -w /app mongo-runner:local \
+      python -m ${MODULE} --deployment ${DEPLOYMENT} --profile ${PROFILE} --out results"
+else
+  # A single standalone node on its own VM: the 1-node B-series baseline. The
+  # write URI is a direct connection to that node; there is no secondary to
+  # offload reads to, so BENCH_SECONDARY_URIS is left unset. A bounded selection
+  # timeout fails fast on a wrong address.
+  if [ "$DRY_RUN" -eq 1 ]; then
+    echo "+ gcloud compute instances list --filter=labels.deployment=${DEPLOYMENT} AND labels.role=node --format=networkIP (node IP)"
+    NODE_IP="10.10.0.1"
+  else
+    NODE_IP="$(gcloud compute instances list \
+      --filter="labels.deployment=${DEPLOYMENT} AND labels.role=node" \
+      --format="value(networkInterfaces[0].networkIP)")"
+  fi
+  PRIMARY_URI="mongodb://${NODE_IP}:27017/?directConnection=true&serverSelectionTimeoutMS=10000"
+  run gcloud compute ssh "$CONTROL" --zone="$GCP_ZONE" --command="\
+    cd /opt/mellow/repo && \
+    BENCH_GIT_SHA='${GIT_SHA}' \
+    BENCH_PRIMARY_URI='${PRIMARY_URI}' \
+    docker run --rm --network host -e BENCH_PRIMARY_URI -e BENCH_GIT_SHA \
       -v \$PWD:/app -w /app mongo-runner:local \
       python -m ${MODULE} --deployment ${DEPLOYMENT} --profile ${PROFILE} --out results"
 fi
