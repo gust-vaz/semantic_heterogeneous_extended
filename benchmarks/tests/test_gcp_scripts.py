@@ -299,6 +299,53 @@ def test_run_passes_a_bounded_server_selection_timeout(tmp_path):
     assert "serverSelectionTimeoutMS" in done.stdout
 
 
+def test_run_dry_run_rs3_b1_sets_override_uris_and_calls_the_module(tmp_path):
+    done = run("run.sh", "rs3", "--experiment", "b1", "--profile", "smoke",
+               "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    out = done.stdout
+    assert "BENCH_PRIMARY_URI=" in out
+    assert "replicaSet=rs0" in out
+    assert "BENCH_SECONDARY_URIS=" in out
+    assert "directConnection=true" in out
+    assert "benchmarks.experiments.b1_read_offloading" in out
+    assert "--deployment rs3" in out
+    assert "--profile smoke" in out
+    assert "results-cloud/rs3" in out
+    assert "BENCH_GIT_SHA" in out
+    assert "serverSelectionTimeoutMS" in out
+    assert "BENCH_ROUTER_URI" not in out     # rs uses the primary/secondary override
+
+
+def test_run_maps_every_b_experiment(tmp_path):
+    env = with_fake_gcloud(tmp_path)
+    for exp, module in [("b1", "b1_read_offloading"), ("b2", "b2_write_replication"),
+                        ("b3", "b3_strategy_distribution"), ("b4", "b4_chain_depth")]:
+        out = run("run.sh", "rs3", "--experiment", exp, "--dry-run", env=env).stdout
+        assert f"benchmarks.experiments.{module}" in out
+
+
+def test_run_rs_defaults_to_b1(tmp_path):
+    out = run("run.sh", "rs3", "--dry-run", env=with_fake_gcloud(tmp_path)).stdout
+    assert "b1_read_offloading" in out
+
+
+def test_run_secondary_uris_exclude_the_primary_member(tmp_path):
+    # rs3: 3 members, member1 leads -> exactly 2 secondary URIs.
+    out = run("run.sh", "rs3", "--experiment", "b1", "--dry-run",
+              env=with_fake_gcloud(tmp_path)).stdout
+    line = next(l for l in out.splitlines() if "BENCH_SECONDARY_URIS=" in l)
+    assert line.count("directConnection=true") == 2
+
+
+def test_run_shard_path_is_unchanged(tmp_path):
+    # Regression: sh4 still uses the router URI and the s1 default module.
+    out = run("run.sh", "sh4", "--dry-run", env=with_fake_gcloud(tmp_path)).stdout
+    assert "BENCH_ROUTER_URI=" in out
+    assert "benchmarks.experiments.s1_operation_cost" in out
+    assert "BENCH_PRIMARY_URI" not in out
+
+
 def test_teardown_dry_run_deletes_named_vms_not_by_filter(tmp_path):
     done = run("teardown.sh", "sh8", "--dry-run", env=with_fake_gcloud(tmp_path))
     assert done.returncode == 0, done.stderr
