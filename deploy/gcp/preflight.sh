@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$HERE/config.env"
 
-usage() { echo "Usage: ./preflight.sh [--deployment sh1|sh4|sh8]"; }
+usage() { echo "Usage: ./preflight.sh [--deployment sh1|sh4|sh7|sh8|rs3|rs5]"; }
 DEPLOYMENT=""
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -57,8 +57,8 @@ if [ -n "$PROJECT" ] && [ "$PROJECT" != "(unset)" ]; then
 fi
 
 if [ -n "$DEPLOYMENT" ]; then
-  shards="$(shard_count_for "$DEPLOYMENT")"
-  needed=$((4 + shards * 2))   # n2-standard-4 control + e2-small shards (2 vCPU each)
+  nodes="$(data_count_for "$DEPLOYMENT")"
+  needed=$((4 + nodes * 2))   # e2-standard-4 control + e2-small data VMs (2 vCPU each)
   quota="$(gcloud compute regions describe "$GCP_REGION" \
              --flatten="quotas[]" \
              --format="csv[no-heading](quotas.metric,quotas.limit)" 2>/dev/null \

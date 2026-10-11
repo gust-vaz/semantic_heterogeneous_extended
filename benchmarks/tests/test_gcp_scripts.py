@@ -397,3 +397,28 @@ def test_stop_and_start_and_status_dry_run(tmp_path):
     assert "instances stop" in run("stop.sh", "sh4", "--dry-run", env=env).stdout
     assert "instances start" in run("start.sh", "sh4", "--dry-run", env=env).stdout
     assert "instances list" in run("status.sh", "--dry-run", env=env).stdout
+
+
+def test_stop_start_accept_a_replica_set(tmp_path):
+    env = with_fake_gcloud(tmp_path)
+    assert run("stop.sh", "rs3", "--dry-run", env=env).returncode == 0
+    assert run("start.sh", "rs5", "--dry-run", env=env).returncode == 0
+
+
+def test_preflight_quota_for_a_replica_set(tmp_path):
+    stub = tmp_path / "gcloud"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        '  *"auth list"*) echo me@example.com ;;\n'
+        '  *"config get-value project"*) echo proj ;;\n'
+        '  *"billing projects describe"*) echo True ;;\n'
+        '  *"services list"*) echo compute.googleapis.com ;;\n'
+        '  *"regions describe"*) echo "CPUS,200.0" ;;\n'
+        '  *) echo "" ;;\n'
+        'esac\nexit 0\n')
+    stub.chmod(0o755)
+    env = dict(os.environ); env["PATH"] = f"{tmp_path}:{env['PATH']}"
+    done = run("preflight.sh", "--deployment", "rs5", env=env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "vCPU quota (200 >= 14" in done.stdout   # 4 + 5*2
