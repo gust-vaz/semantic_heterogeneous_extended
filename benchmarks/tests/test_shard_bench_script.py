@@ -56,7 +56,7 @@ def test_an_absolute_out_path_is_refused_before_anything_starts():
 
 
 def test_every_experiment_sweeps_all_three_shard_counts():
-    assert re.search(r's1\|s2\|s3\|s4\|s5\)\s*echo\s+"sh1,sh4,sh8"', _read())
+    assert re.search(r's1\|s2\|s3\|s4\|s5\)\s*echo\s+"sh1,sh4,sh7"', _read())
 
 
 def test_all_does_not_run_s2_separately():
