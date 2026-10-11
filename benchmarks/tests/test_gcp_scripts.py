@@ -370,6 +370,28 @@ def test_teardown_is_a_noop_when_nothing_matches(tmp_path):
     assert "nothing" in done.stdout.lower()
 
 
+def test_teardown_dry_run_rs5_names_members_and_deletes_the_vpc(tmp_path):
+    done = run("teardown.sh", "rs5", "--all", "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    out = done.stdout
+    delete_line = next(l for l in out.splitlines() if "instances delete" in l)
+    assert "mellow-rs5-control" in delete_line
+    assert "mellow-rs5-member5" in delete_line
+    assert "networks delete" in out        # --all removes the VPC
+
+
+def test_teardown_all_removes_the_vpc_even_with_no_vms(tmp_path):
+    # gcloud lists no instances; --all must still delete the VPC, not early-exit.
+    stub = tmp_path / "gcloud"
+    stub.write_text("#!/usr/bin/env bash\necho ''\nexit 0\n")
+    stub.chmod(0o755)
+    env = dict(os.environ); env["PATH"] = f"{tmp_path}:{env['PATH']}"
+    done = run("teardown.sh", "rs3", "--all", env=env)
+    assert done.returncode == 0, done.stderr
+    assert "nothing to delete" in done.stdout.lower()
+    assert "Removed the VPC" in done.stdout
+
+
 def test_stop_and_start_and_status_dry_run(tmp_path):
     env = with_fake_gcloud(tmp_path)
     assert "instances stop" in run("stop.sh", "sh4", "--dry-run", env=env).stdout
