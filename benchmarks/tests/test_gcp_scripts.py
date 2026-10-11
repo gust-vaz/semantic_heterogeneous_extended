@@ -77,7 +77,7 @@ def test_bootstrap_member_is_strict_and_runs_the_member_compose():
     assert "mongo-cache-gb" in text
 
 
-SCRIPTS = ["preflight.sh", "provision.sh", "init-cluster.sh",
+SCRIPTS = ["preflight.sh", "provision.sh", "init-cluster.sh", "init-replicaset.sh",
            "run.sh", "teardown.sh", "stop.sh", "start.sh", "status.sh"]
 
 
@@ -262,6 +262,21 @@ def test_init_cluster_dry_run_collects_ips_and_runs_the_init(tmp_path):
     assert "instances list" in out            # collects shard private IPs
     assert "SHARD_HOSTS" in out               # builds the env contract
     assert "init-sharded.js" in out           # runs the parameterized init
+
+
+def test_init_replicaset_dry_run_collects_ips_and_runs_the_init(tmp_path):
+    done = run("init-replicaset.sh", "rs3", "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    out = done.stdout
+    assert "labels.role=member" in out          # collects member private IPs
+    assert "REPLSET_HOSTS" in out                # builds the env contract
+    assert "init-replicaset-cloud.js" in out     # runs the parameterized cloud init
+    assert ":27017" in out                       # members speak on 27017
+
+
+def test_init_replicaset_refuses_a_shard_deployment(tmp_path):
+    done = run("init-replicaset.sh", "sh4", "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode != 0
 
 
 def test_run_dry_run_sets_router_uri_and_calls_the_module(tmp_path):
