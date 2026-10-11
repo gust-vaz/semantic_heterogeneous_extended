@@ -56,6 +56,9 @@ def test_config_maps_deployment_kind_count_and_role():
     assert out("data_count_for sh4") == "4"
     assert out("data_role_for rs5") == "member"
     assert out("data_role_for sh4") == "shard"
+    assert out("kind_for single") == "standalone"
+    assert out("data_count_for single") == "1"
+    assert out("data_role_for single") == "node"
     assert out("shard_count_for sh8") == "8"   # kept as an alias
 
 
