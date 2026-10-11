@@ -51,10 +51,57 @@ not automatable for the sign-in and billing steps, so they are yours:
 | `sh7` | 8 (7 shards + control) | 8 | yes — exactly the cap |
 | `sh8` | 9 (8 shards + control) | 9 | **no** — trial caps `IN_USE_ADDRESSES` at 8, and a trial cannot request an increase |
 
-**`sh7` is the largest cluster the free trial can run.** `sh8` needs 9 external
+**`sh7` is the largest sharded cluster the free trial can run** (the replica-set
+deployments `rs3`/`rs5` need only 4 and 6 IPs — see "Running the B-series on a
+real replica set" below). `sh8` needs 9 external
 IPs; use `sh7` instead, or upgrade to a paid account (keeps the credit) and raise
 the quota. `sh4` runs the full OFAT matrix (43 cells for s1); `sh1` and `sh7` run
 the 6-cell core (the OFAT extensions are anchored on `sh4`).
+
+## Running the B-series on a real replica set
+
+The same layer runs the replica-set read-offloading experiments (`b1`–`b4`) on a
+real multi-VM set: one `mongod` member per VM, plus a control VM that runs only
+the benchmark runner (no config server or router). One member per VM is what
+makes read offloading measurable — on a single host the "secondaries" would share
+the primary's CPU and disk, so the effect being measured could not appear.
+
+| deployment | members | VMs | external IPs | fits the trial? |
+|---|---|---|---|---|
+| `rs3` | 3 | 4 (3 members + control) | 4 | yes |
+| `rs5` | 5 | 6 (5 members + control) | 6 | yes |
+
+The first member (member1) is pinned PRIMARY by a higher priority, so the write
+URI names the whole set and reads are offloaded to members 2..N.
+
+```bash
+DEP=rs3                                    # or rs5
+
+# 1. Create the cluster (VPC reused across deployments; ~1 min).
+./deploy/gcp/provision.sh "$DEP"
+
+# 2. Wait for the member VMs to finish booting (install Docker, pull the image).
+until gcloud compute ssh "mellow-${DEP}-member1" --zone=us-central1-b --quiet \
+        --command "docker ps --format '{{.Names}}'" 2>/dev/null | grep -q member; do
+  echo "waiting for the members to boot..."; sleep 20
+done
+
+# 3. Initiate the replica set across the member VMs.
+./deploy/gcp/init-replicaset.sh "$DEP"
+
+# 4. Run the four B-series experiments. Results land in results-cloud/$DEP/.
+for exp in b1 b2 b3 b4; do
+  ./deploy/gcp/run.sh "$DEP" --experiment "$exp" --profile smoke
+done
+
+# 5. Confirm what is up, then shut it down.
+./deploy/gcp/status.sh
+./deploy/gcp/teardown.sh "$DEP" --all      # deletes the VMs AND the VPC
+```
+
+Unlike `s2` (which needs `--profile medium` to see migrations), the B-series is
+meaningful at `smoke`. Members default to `e2-small`; raise `MEMBER_MACHINE` to
+`e2-medium` in `config.env` if a larger profile runs the members out of memory.
 
 ## Start a cluster and run every experiment on it
 
