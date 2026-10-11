@@ -428,6 +428,14 @@ def test_teardown_dry_run_rs5_names_members_and_deletes_the_vpc(tmp_path):
     assert "networks delete" in out        # --all removes the VPC
 
 
+def test_teardown_dry_run_single_names_the_node_and_control(tmp_path):
+    done = run("teardown.sh", "single", "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    delete_line = next(l for l in done.stdout.splitlines() if "instances delete" in l)
+    assert "mellow-single-control" in delete_line
+    assert "mellow-single-node1" in delete_line
+
+
 def test_teardown_all_removes_the_vpc_even_with_no_vms(tmp_path):
     # gcloud lists no instances; --all must still delete the VPC, not early-exit.
     stub = tmp_path / "gcloud"
@@ -451,6 +459,31 @@ def test_stop_start_accept_a_replica_set(tmp_path):
     env = with_fake_gcloud(tmp_path)
     assert run("stop.sh", "rs3", "--dry-run", env=env).returncode == 0
     assert run("start.sh", "rs5", "--dry-run", env=env).returncode == 0
+
+
+def test_stop_start_accept_single(tmp_path):
+    env = with_fake_gcloud(tmp_path)
+    assert run("stop.sh", "single", "--dry-run", env=env).returncode == 0
+    assert run("start.sh", "single", "--dry-run", env=env).returncode == 0
+
+
+def test_preflight_quota_for_single(tmp_path):
+    stub = tmp_path / "gcloud"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "$*" in\n'
+        '  *"auth list"*) echo me@example.com ;;\n'
+        '  *"config get-value project"*) echo proj ;;\n'
+        '  *"billing projects describe"*) echo True ;;\n'
+        '  *"services list"*) echo compute.googleapis.com ;;\n'
+        '  *"regions describe"*) echo "CPUS,200.0" ;;\n'
+        '  *) echo "" ;;\n'
+        'esac\nexit 0\n')
+    stub.chmod(0o755)
+    env = dict(os.environ); env["PATH"] = f"{tmp_path}:{env['PATH']}"
+    done = run("preflight.sh", "--deployment", "single", env=env)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "vCPU quota (200 >= 6" in done.stdout   # 4 + 1*2
 
 
 def test_preflight_quota_for_a_replica_set(tmp_path):

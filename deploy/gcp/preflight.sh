@@ -6,7 +6,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$HERE/config.env"
 
-usage() { echo "Usage: ./preflight.sh [--deployment sh1|sh4|sh7|sh8|rs3|rs5]"; }
+usage() { echo "Usage: ./preflight.sh [--deployment sh1|sh4|sh7|sh8|rs3|rs5|single]"; }
 DEPLOYMENT=""
 while [ $# -gt 0 ]; do
   case "$1" in
