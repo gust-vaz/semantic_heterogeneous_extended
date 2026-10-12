@@ -3,6 +3,15 @@
 How does query cost grow as semantic operations stack up, and does the strategy
 change the shape of that growth? Read-only workload over corpora built with
 increasing chain lengths.
+
+The synthetic corpus is chained: one linear translation chain v0 -> ... -> vN,
+with every query on a chain value, so resolving a query follows all N hops. The
+default corpus would not do: its operations never share a value, so a query
+goes through at most one of them and "depth" would only be operation count.
+With two or more chained translations, preprocess stops finding the original
+value (a limitation the library documents in its test_chained.py), so the two
+strategies do not return the same records here - compare their costs knowing
+that.
 """
 
 import sys
@@ -51,6 +60,10 @@ def main(argv=None):
     primary, _ = runner.resolve_endpoints(args.deployment)
     mongo_version = topology.server_version(primary)
 
+    # Rows name the corpus they measured, so they are never mixed with (or
+    # resumed against) rows from the earlier independent-operations corpus.
+    corpus_label = "synthetic_chained" if args.corpus == "synthetic" else args.corpus
+
     out_path = results.result_path(args.out, EXPERIMENT, args.profile)
     done = set() if args.fresh else resume.completed_cells(
         args.out, EXPERIMENT, args.profile, KEY_COLUMNS)
@@ -62,7 +75,7 @@ def main(argv=None):
         pending = [repetition for repetition in range(profile["reps"])
                    if resume.cell_key(
                        {"experiment": EXPERIMENT, "deployment": args.deployment,
-                        "corpus": args.corpus, "operation_mode": operation_mode,
+                        "corpus": corpus_label, "operation_mode": operation_mode,
                         "chain_length": chain_length,
                         "repetition": repetition}, KEY_COLUMNS) not in done]
         skipped += profile["reps"] - len(pending)
@@ -77,7 +90,7 @@ def main(argv=None):
             args.corpus, primary_uri=primary, records=profile["records"],
             chain_length=chain_length, operation_mode=operation_mode,
             write_concern=WRITE_CONCERN, max_files=profile["real_max_files"],
-            domain=domain,
+            domain=domain, chained=True,
         )
         try:
             specs = runner.client_specs(
@@ -90,7 +103,7 @@ def main(argv=None):
                 row = runner.row_from(
                     result, experiment=EXPERIMENT, profile_name=args.profile,
                     profile=profile, deployment=args.deployment,
-                    corpus_kind=args.corpus, repetition=repetition,
+                    corpus_kind=corpus_label, repetition=repetition,
                     corpus_handle=handle, mongo_version=mongo_version,
                     read_target="primary", read_mode="split",
                     operation_mode=operation_mode, write_concern=WRITE_CONCERN,

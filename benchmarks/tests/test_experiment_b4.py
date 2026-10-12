@@ -31,3 +31,27 @@ def test_b4_smoke_run_reduces_the_chain_sweep(tmp_path, primary_uri, monkeypatch
     assert sorted(frame["chain_length"].unique()) == [1, 5]
     assert sorted(frame["operation_mode"].unique()) == ["preprocess", "rewrite"]
     assert (frame["setup_operations_s"] > 0).all()
+
+
+def test_b4_builds_chained_corpora_and_labels_its_rows(tmp_path, primary_uri, monkeypatch):
+    # Depth only means depth on a chained corpus: on the default one every
+    # operation lands on its own values, so no query ever follows more than a hop.
+    from benchmarks.harness import corpus as corpus_module
+    real_build = corpus_module.build_corpus
+    seen = []
+
+    def spy(kind, **kwargs):
+        seen.append(kwargs.get("chained"))
+        return real_build(kind, **kwargs)
+
+    monkeypatch.setattr(b4.corpus_module, "build_corpus", spy)
+    monkeypatch.setenv("BENCH_PRIMARY_URI", primary_uri)
+    assert b4.main(["--deployment", "single", "--profile", "smoke",
+                    "--out", str(tmp_path), "--records", "50",
+                    "--chain-lengths", "2"]) == 0
+
+    assert seen and all(flag is True for flag in seen)
+    frame = pd.read_csv(list(tmp_path.rglob("b4_smoke_*.csv"))[0])
+    # Rows say which corpus they measured, so they cannot be mistaken for (or
+    # resumed against) the earlier independent-operations B4 rows.
+    assert set(frame["corpus"]) == {"synthetic_chained"}

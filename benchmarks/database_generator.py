@@ -199,7 +199,40 @@ class DatabaseGenerator:
             }
 
         self.versions_dates.append(version_date)
-        self.operations.append((operation_type, version_date, arguments))       
+        self.operations.append((operation_type, version_date, arguments))
+
+    def generate_chain(self, length):
+        """Append `length` translations forming one linear chain v0 -> v1 -> ... -> vN.
+
+        generate_version() never reuses a value, so its operations land on disjoint
+        values and a queried value goes through at most one of them. Here every
+        translation starts where the previous one ended, on a single evolution
+        field, with strictly increasing valid-from dates, so resolving any chain
+        value means following every hop. Only translations: a merge or split would
+        branch the chain. Returns the chain values in order (length + 1 of them).
+        """
+        field_name = self.rng.choice(self.evolution_fields)[0]
+        distinct = list(dict.fromkeys(self.field_domain[field_name]))
+        if len(distinct) < length + 1:
+            raise ValueError(
+                f"field {field_name} has {len(distinct)} distinct values; a chain of "
+                f"{length} translations needs {length + 1}")
+        values = self.rng.sample(distinct, length + 1)
+        days = sorted(self.rng.sample(range(365*2000, 365*2100), length))
+
+        for index, day in enumerate(days):
+            version_date = datetime.fromordinal(day)
+            self.evoluted_values.setdefault(field_name, set()).update(values[index:index + 2])
+            self.versions_dates.append(version_date)
+            self.operations.append(('translation', version_date, {
+                'fieldName': field_name,
+                'oldValue': values[index],
+                'newValue': values[index + 1],
+            }))
+
+        self.chain_field = field_name
+        self.chain_values = values
+        return field_name, values
 
 
     def generate(self, number_of_records, number_of_versions, number_of_fields, number_of_values_in_domain, number_of_evolution_fields, operation_mode):

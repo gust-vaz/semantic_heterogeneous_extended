@@ -58,12 +58,19 @@ def domain_for_chain(chain_length):
 
 def build_synthetic(primary_uri, records, chain_length, operation_mode,
                     write_concern="majority", seed=42, fields=8, domain=None,
-                    evolution_fields=2, shard_key=None, skew=0.0):
+                    evolution_fields=2, shard_key=None, skew=0.0, chained=False):
     """Fabricate a corpus with DatabaseGenerator and apply `chain_length` operations.
 
     `domain` defaults to whatever this chain length needs. Sweeps that vary
     chain_length should pass one explicit domain sized for their longest chain,
     so query selectivity stays constant across the sweep.
+
+    By default the operations are independent (generate_version never reuses a
+    value) and queries are drawn over every field, so few of them touch an evolved
+    value. `chained=True` instead builds one linear translation chain of
+    `chain_length` hops and draws every query from the chain's values, so query
+    resolution has to follow the whole chain - what a version-chain depth sweep
+    means. The default path draws exactly what it always did.
     """
     if domain is None:
         domain = domain_for_chain(chain_length)
@@ -92,14 +99,20 @@ def build_synthetic(primary_uri, records, chain_length, operation_mode,
     setup_insert_s = time.time() - start
 
     start = time.time()
-    for _ in range(chain_length):
-        generator.generate_version()
+    if chained:
+        chain_field, chain_values = generator.generate_chain(chain_length)
+    else:
+        for _ in range(chain_length):
+            generator.generate_version()
     for operation_type, valid_from, arguments in generator.operations:
         generator.collection.execute_operation(operation_type, valid_from, arguments)
     setup_operations_s = time.time() - start
 
     query_set = []
     for _ in range(QUERY_SET_SIZE):
+        if chained:
+            query_set.append({chain_field: rng.choice(chain_values)})
+            continue
         field_name = rng.choice(generator.fields)[0]
         query_set.append({field_name: rng.choice(generator.field_domain[field_name])})
 
@@ -217,5 +230,6 @@ def build_corpus(kind, **kwargs):
         kwargs.pop("chain_length", None)
         kwargs.pop("domain", None)
         kwargs.pop("skew", None)
+        kwargs.pop("chained", None)   # the real corpus brings its own operations
         return build_real(**kwargs)
     raise ValueError(f"Unknown corpus '{kind}'. Choose: synthetic, real")
