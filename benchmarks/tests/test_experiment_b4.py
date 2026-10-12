@@ -3,12 +3,13 @@ from benchmarks.experiments import b4_chain_depth as b4
 from benchmarks.harness.results import COLUMNS
 
 
-def test_chain_lengths_stop_at_twenty_five():
+def test_chain_lengths_stop_at_fifteen():
     # On the chained corpus preprocess cascades: every hop copies the records the
-    # earlier hops already copied. Measured at 20k records, building c=10 took
-    # 120 s against 6 s for c=5, and c=50 did not finish in 20 min, so 50 is out
-    # of reach at campaign sizes.
-    assert b4.CHAIN_LENGTHS == [1, 5, 10, 25]
+    # earlier hops already copied, and the collection outgrows the cache. At the
+    # 100k campaign size on a 2 GB node, chains up to 10 built in minutes, but
+    # c=25 was still on hop 14 after 3 hours (the processed collection at 3x the
+    # corpus, the node IO-bound), so the sweep stops at 15.
+    assert b4.CHAIN_LENGTHS == [1, 5, 10, 15]
 
 
 def test_both_strategies_are_swept():

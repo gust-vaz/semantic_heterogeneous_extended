@@ -22,10 +22,11 @@ from benchmarks.harness.profiles import get_profile
 from benchmarks.harness.workload import run_workload
 
 EXPERIMENT = "b4"
-#: Capped at 25: on the chained corpus preprocess cascades (each hop copies the
-#: records earlier hops copied), so building c=50 does not finish at campaign
-#: sizes - measured at 20k records, c=10 took 120 s and c=50 over 20 min.
-CHAIN_LENGTHS = [1, 5, 10, 25]
+#: Capped at 15: on the chained corpus preprocess cascades (each hop copies the
+#: records earlier hops copied) and the processed collection outgrows the node's
+#: cache. At 100k records on a 2 GB node, chains up to 10 built in minutes, but
+#: c=25 was still on hop 14 after 3 hours with the collection at 3x the corpus.
+CHAIN_LENGTHS = [1, 5, 10, 15]
 OPERATION_MODES = ["preprocess", "rewrite"]
 WRITE_CONCERN = "majority"
 
