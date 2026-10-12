@@ -3,8 +3,12 @@ from benchmarks.experiments import b4_chain_depth as b4
 from benchmarks.harness.results import COLUMNS
 
 
-def test_chain_lengths_span_one_to_fifty():
-    assert b4.CHAIN_LENGTHS == [1, 5, 10, 25, 50]
+def test_chain_lengths_stop_at_twenty_five():
+    # On the chained corpus preprocess cascades: every hop copies the records the
+    # earlier hops already copied. Measured at 20k records, building c=10 took
+    # 120 s against 6 s for c=5, and c=50 did not finish in 20 min, so 50 is out
+    # of reach at campaign sizes.
+    assert b4.CHAIN_LENGTHS == [1, 5, 10, 25]
 
 
 def test_both_strategies_are_swept():
@@ -12,7 +16,7 @@ def test_both_strategies_are_swept():
 
 
 def test_cells_are_the_cross_product():
-    assert len(b4.cells("rs3")) == 10
+    assert len(b4.cells("rs3")) == 8
     assert (1, "preprocess") in b4.cells("rs3")
 
 

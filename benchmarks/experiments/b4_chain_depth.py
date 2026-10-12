@@ -22,7 +22,10 @@ from benchmarks.harness.profiles import get_profile
 from benchmarks.harness.workload import run_workload
 
 EXPERIMENT = "b4"
-CHAIN_LENGTHS = [1, 5, 10, 25, 50]
+#: Capped at 25: on the chained corpus preprocess cascades (each hop copies the
+#: records earlier hops copied), so building c=50 does not finish at campaign
+#: sizes - measured at 20k records, c=10 took 120 s and c=50 over 20 min.
+CHAIN_LENGTHS = [1, 5, 10, 25]
 OPERATION_MODES = ["preprocess", "rewrite"]
 WRITE_CONCERN = "majority"
 

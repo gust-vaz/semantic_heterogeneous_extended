@@ -273,7 +273,7 @@ run the experiment in an in-network runner container → write the CSV → `comp
 | `b1` | Does routing record reads to secondaries raise aggregate query throughput? Workers are assigned nodes round-robin, so reads genuinely fan out. | `single,rs3,rs5` |
 | `b2` | What does durability cost as the cluster grows? Insert-only, swept across write concerns `1 / majority / all`. | `single,rs3,rs5` |
 | `b3` | Does distribution change which strategy wins? Mixed read/write across `preprocess` vs `rewrite`. | `single,rs3,rs5` |
-| `b4` | How does query cost grow as semantic operations stack up (chain length 1→50)? | `single,rs3` |
+| `b4` | How does query cost grow as semantic operations stack up (chain length 1→25, on a chained translation corpus)? | `single,rs3` |
 
 `./bench.sh all` runs `b1`, `b2`, `b4`, then `b3` (largest matrix last).
 
