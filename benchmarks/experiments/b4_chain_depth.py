@@ -22,11 +22,18 @@ from benchmarks.harness.profiles import get_profile
 from benchmarks.harness.workload import run_workload
 
 EXPERIMENT = "b4"
-#: Capped at 15: on the chained corpus preprocess cascades (each hop copies the
-#: records earlier hops copied) and the processed collection outgrows the node's
-#: cache. At 100k records on a 2 GB node, chains up to 10 built in minutes, but
-#: c=25 was still on hop 14 after 3 hours with the collection at 3x the corpus.
-CHAIN_LENGTHS = [1, 5, 10, 15]
+#: Capped at 10. On the chained corpus, applying the chain to the preprocess corpus
+#: costs exponentially more per hop: Collection re-applies every earlier operation
+#: through a full scan (split_processed_records) and recurses twice. Measured at
+#: 100k records on 2 GB nodes, setup_operations_s went 0.9 s -> 17.9 s -> 1001 s for
+#: c = 1, 5, 10 on one node (1.3 -> 28 -> 1264 s on a 3-node set), and c=15 was
+#: projected at 10-20 hours per cluster.
+CHAIN_LENGTHS = [1, 5, 10]
+#: The value domain is sized for a chain of 15, not for the longest chain in the
+#: sweep. That is what the first campaign built (60 values); shrinking it to suit
+#: the lower cap would change the records and queries, and rows already collected
+#: would stop being comparable with new ones.
+VALUE_DOMAIN = corpus_module.domain_for_chain(15)
 OPERATION_MODES = ["preprocess", "rewrite"]
 WRITE_CONCERN = "majority"
 
@@ -56,10 +63,10 @@ def main(argv=None):
     lengths = ([int(v) for v in args.chain_lengths.split(",")]
                if args.chain_lengths else CHAIN_LENGTHS)
 
-    # One domain for the whole sweep, sized for the longest chain. If the domain
-    # grew with chain_length, query selectivity would change alongside it and
-    # confound the very thing this experiment measures.
-    domain = corpus_module.domain_for_chain(max(lengths))
+    # One domain for the whole sweep. If the domain grew with chain_length, query
+    # selectivity would change alongside it and confound the very thing this
+    # experiment measures. Never smaller than a chain needs.
+    domain = max(VALUE_DOMAIN, corpus_module.domain_for_chain(max(lengths)))
 
     primary, _ = runner.resolve_endpoints(args.deployment)
     mongo_version = topology.server_version(primary)
