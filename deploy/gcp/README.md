@@ -157,6 +157,18 @@ control VM's router with a bounded timeout, runs the experiment in the runner
 image on the control VM, tags each row with the git sha, and copies the CSVs back
 to `results-cloud/<deployment>/`.
 
+**Real DATASUS corpus.** `--corpus real` (default `synthetic`) runs any
+experiment except `b4` on the DATASUS mortality dataset. That dataset is
+git-ignored, so the VM's clone does not have it: `run.sh` tars
+`dataset/MellowDB_experiments/{source_data,semantic_operations}` from your
+checkout (~50 MB compressed), copies it to the control VM and unpacks it inside
+the clone, once per VM. The profile picks how many yearly CSVs are loaded
+(`smoke` 1, `small` 3, `medium` 10, `full` all 43), so expect far longer cells
+than on the synthetic corpus: each one loads the files and applies all ~220
+CID-9 → CID-10 / municipality operations. `b4` is refused because the real
+corpus has fixed operations and no chain length to vary. Rows carry
+`corpus=real`, so they never mix with synthetic rows.
+
 **`s2` (rebalancing) needs a bigger profile.** At `smoke` (1000 records) the
 balancer has too little data to migrate, so `s2` reports `chunks_moved=0`. Run it
 at `--profile medium` (100k) to see real migrations; the other four are meaningful

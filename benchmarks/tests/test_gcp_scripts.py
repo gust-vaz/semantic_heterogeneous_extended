@@ -514,3 +514,51 @@ def test_preflight_quota_for_a_replica_set(tmp_path):
     done = run("preflight.sh", "--deployment", "rs5", env=env)
     assert done.returncode == 0, done.stdout + done.stderr
     assert "vCPU quota (200 >= 14" in done.stdout   # 4 + 5*2
+
+
+def test_run_passes_the_synthetic_corpus_by_default(tmp_path):
+    out = run("run.sh", "rs3", "--experiment", "b1", "--dry-run",
+              env=with_fake_gcloud(tmp_path)).stdout
+    assert "--corpus synthetic" in out
+    assert "mellow-dataset.tgz" not in out       # nothing to upload
+
+
+@pytest.mark.parametrize("deployment", ["sh4", "rs3", "single"])
+def test_run_real_corpus_uploads_the_dataset_then_runs_on_it(tmp_path, deployment):
+    if not os.path.isdir("dataset/MellowDB_experiments/source_data"):
+        pytest.skip("DATASUS dataset not present")
+    done = run("run.sh", deployment, "--corpus", "real", "--dry-run",
+               env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    out = done.stdout
+    # the git-ignored dataset is shipped to where the harness reads it, in the repo
+    assert "source_data semantic_operations" in out
+    assert "mellow-dataset.tgz" in out
+    assert "/opt/mellow/repo/dataset/MellowDB_experiments" in out
+    assert "--corpus real" in out
+    assert out.index("mellow-dataset.tgz") < out.index("--corpus real")
+
+
+def test_run_refuses_an_unknown_corpus(tmp_path):
+    done = run("run.sh", "rs3", "--corpus", "datasus", "--dry-run",
+               env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 2
+    assert "Unknown corpus" in done.stderr
+
+
+def test_run_refuses_b4_on_the_real_corpus_before_uploading(tmp_path):
+    done = run("run.sh", "rs3", "--experiment", "b4", "--corpus", "real",
+               "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 2
+    assert "b4" in done.stderr
+    assert "mellow-dataset.tgz" not in done.stdout
+
+
+def test_run_real_corpus_fails_when_the_dataset_is_absent(tmp_path):
+    # run from an empty directory: no dataset/ relative to the cwd
+    script = os.path.abspath(os.path.join(GCP, "run.sh"))
+    done = subprocess.run(["bash", script, "rs3", "--corpus", "real", "--dry-run"],
+                          capture_output=True, text=True, cwd=tmp_path,
+                          env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 2
+    assert "dataset not found" in done.stderr

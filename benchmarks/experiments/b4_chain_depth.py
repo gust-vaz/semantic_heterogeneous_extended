@@ -58,6 +58,10 @@ def main(argv=None):
     parser.add_argument("--chain-lengths", default=None,
                         help="Comma-separated chain lengths, e.g. 1,5,10")
     args = parser.parse_args(argv)
+    if args.corpus == "real":
+        # The real corpus brings its own fixed CID-9 -> CID-10 operations, so
+        # every chain length would build and measure the same corpus.
+        parser.error("b4 sweeps synthetic chain lengths; --corpus real has no chain to vary")
     profile = get_profile(args.profile, clients=args.clients, records=args.records)
 
     lengths = ([int(v) for v in args.chain_lengths.split(",")]

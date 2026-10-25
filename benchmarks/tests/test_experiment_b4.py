@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 from benchmarks.experiments import b4_chain_depth as b4
 from benchmarks.harness.results import COLUMNS
 
@@ -82,3 +83,11 @@ def test_b4_keeps_the_value_domain_sized_for_chain_fifteen(tmp_path, primary_uri
                     "--chain-lengths", "2"]) == 0
     assert domains and set(domains) == {60}
     assert b4.VALUE_DOMAIN == 60
+
+
+def test_b4_refuses_the_real_corpus():
+    # The real corpus has its own fixed operations: a chain sweep over it would
+    # measure one corpus six times under different labels.
+    with pytest.raises(SystemExit) as raised:
+        b4.main(["--deployment", "single", "--corpus", "real"])
+    assert raised.value.code == 2
