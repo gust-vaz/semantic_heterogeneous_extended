@@ -132,3 +132,29 @@ def test_build_corpus_hands_a_shard_key_to_the_real_corpus(tmp_path, primary_uri
                               operation_mode="preprocess", dataset_root=root,
                               shard_key={"cid": "hashed"})
     MongoClient(primary_uri).drop_database(handle.database_name)
+
+
+def _indexed_fields(uri, handle, suffix):
+    coll = MongoClient(uri)[handle.database_name][handle.collection_name + suffix]
+    return [list(spec["key"]) for spec in coll.list_indexes()]
+
+
+@needs_dataset
+@pytest.mark.slow
+@pytest.mark.parametrize("mode, suffix", [("preprocess", "_processed"), ("rewrite", "")])
+def test_real_indexed_indexes_the_collection_queries_run_on(primary_uri, cleanup_corpus,
+                                                            mode, suffix):
+    # Queries run on the processed collection under preprocess and on the
+    # original one under rewrite: that is where the cid index has to be.
+    handle = cleanup_corpus(primary_uri, build_corpus(
+        "real_indexed", primary_uri=primary_uri, operation_mode=mode, max_files=1,
+        records=10, chain_length=5, domain=60, skew=0.0, chained=True))
+    assert ["cid"] in _indexed_fields(primary_uri, handle, suffix)
+
+
+@needs_dataset
+@pytest.mark.slow
+def test_plain_real_builds_no_cid_index(primary_uri, cleanup_corpus):
+    handle = cleanup_corpus(primary_uri, build_corpus(
+        "real", primary_uri=primary_uri, operation_mode="preprocess", max_files=1))
+    assert ["cid"] not in _indexed_fields(primary_uri, handle, "_processed")

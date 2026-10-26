@@ -146,8 +146,16 @@ def dataset_available(root=None):
 
 
 def build_real(primary_uri, operation_mode, write_concern="majority",
-               max_files=None, dataset_root=None, seed=42, shard_key=None):
-    """Load the DATASUS mortality corpus and apply the CID-9 -> CID-10 operations."""
+               max_files=None, dataset_root=None, seed=42, shard_key=None,
+               index=False):
+    """Load the DATASUS mortality corpus and apply the CID-9 -> CID-10 operations.
+
+    `index=True` then indexes the queried field through the library's own
+    create_index (the processed collection under preprocess, the original one
+    under rewrite). Without it every query scans the whole corpus: at all 43
+    files that is ~10M processed documents and ~60 s per read. Built after the
+    operations, so setup_operations_s is unchanged; its time is only logged.
+    """
     root = dataset_root or DATASET_ROOT
     source = os.path.join(root, SOURCE_SUBDIR)
     if not os.path.isdir(source):
@@ -185,6 +193,12 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
     collection.execute_many_operations_by_csv(
         os.path.join(root, OPERATIONS_FILE), 'type', 'valid_from')
     setup_operations_s = time.time() - start
+
+    if index:
+        start = time.time()
+        collection.create_index([EVOLVING_FIELD])
+        print(f"[corpus] index on {EVOLVING_FIELD} built in {time.time() - start:.1f} s",
+              flush=True)
 
     client = MongoClient(primary_uri)
     raw = client[database_name][collection_name]
@@ -225,11 +239,12 @@ def build_corpus(kind, **kwargs):
     if kind == "synthetic":
         kwargs.pop("max_files", None)
         return build_synthetic(**kwargs)
-    if kind == "real":
+    if kind in ("real", "real_indexed"):
+        kwargs["index"] = kind == "real_indexed"
         kwargs.pop("records", None)
         kwargs.pop("chain_length", None)
         kwargs.pop("domain", None)
         kwargs.pop("skew", None)
         kwargs.pop("chained", None)   # the real corpus brings its own operations
         return build_real(**kwargs)
-    raise ValueError(f"Unknown corpus '{kind}'. Choose: synthetic, real")
+    raise ValueError(f"Unknown corpus '{kind}'. Choose: synthetic, real, real_indexed")

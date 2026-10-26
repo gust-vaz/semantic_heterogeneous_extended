@@ -26,7 +26,7 @@ def base_parser(experiment):
                         choices=sorted(name for name in topology.DEPLOYMENTS
                                        if topology.is_sharded(name)))
     parser.add_argument("--profile", default=DEFAULT_PROFILE, choices=sorted(PROFILES))
-    parser.add_argument("--corpus", default="synthetic", choices=["synthetic", "real"])
+    parser.add_argument("--corpus", default="synthetic", choices=["synthetic", "real", "real_indexed"])
     parser.add_argument("--out", default="results",
                         help="Output directory for result CSVs")
     parser.add_argument("--records", type=int, default=None,

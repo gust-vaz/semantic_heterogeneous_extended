@@ -562,3 +562,18 @@ def test_run_real_corpus_fails_when_the_dataset_is_absent(tmp_path):
                           env=with_fake_gcloud(tmp_path))
     assert done.returncode == 2
     assert "dataset not found" in done.stderr
+
+
+def test_run_real_indexed_uploads_the_dataset_too(tmp_path):
+    if not os.path.isdir("dataset/MellowDB_experiments/source_data"):
+        pytest.skip("DATASUS dataset not present")
+    out = run("run.sh", "single", "--corpus", "real_indexed", "--dry-run",
+              env=with_fake_gcloud(tmp_path)).stdout
+    assert "mellow-dataset.tgz" in out
+    assert "--corpus real_indexed" in out
+
+
+def test_run_refuses_b4_on_the_indexed_real_corpus(tmp_path):
+    done = run("run.sh", "rs3", "--experiment", "b4", "--corpus", "real_indexed",
+               "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 2

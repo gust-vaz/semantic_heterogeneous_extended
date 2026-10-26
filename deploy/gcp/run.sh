@@ -10,7 +10,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$HERE/config.env"
 
-usage() { echo "Usage: ./run.sh <sh1|sh4|sh7|sh8|rs3|rs5|single> [--experiment s1..s5|b1..b4] [--profile smoke] [--corpus synthetic|real] [--dry-run]"; }
+usage() { echo "Usage: ./run.sh <sh1|sh4|sh7|sh8|rs3|rs5|single> [--experiment s1..s5|b1..b4] [--profile smoke] [--corpus synthetic|real|real_indexed] [--dry-run]"; }
 DRY_RUN=0
 DEPLOYMENT=""
 EXPERIMENT=""
@@ -49,13 +49,13 @@ case "$EXPERIMENT" in
   *) echo "Unknown experiment '$EXPERIMENT'" >&2; exit 2 ;;
 esac
 case "$CORPUS" in
-  synthetic|real) ;;
-  *) echo "Unknown corpus '$CORPUS' (synthetic|real)" >&2; exit 2 ;;
+  synthetic|real|real_indexed) ;;
+  *) echo "Unknown corpus '$CORPUS' (synthetic|real|real_indexed)" >&2; exit 2 ;;
 esac
 # B4 sweeps the chain length it builds; the real corpus brings its own fixed
 # operations, so every cell would measure the same corpus. Refused before any
 # upload is paid for.
-if [ "$EXPERIMENT" = b4 ] && [ "$CORPUS" = real ]; then
+if [ "$EXPERIMENT" = b4 ] && [ "$CORPUS" != synthetic ]; then
   echo "b4 sweeps synthetic chain lengths; it cannot run on --corpus real" >&2; exit 2
 fi
 
@@ -68,7 +68,7 @@ GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '')"
 # shipped once as a tarball (source CSVs + operations, ~50 MB compressed) into the
 # path the harness reads, relative to the repo; a VM that already has the
 # operations file is left alone. The clone is root-owned, hence sudo.
-if [ "$CORPUS" = real ]; then
+if [ "$CORPUS" != synthetic ]; then
   DATASET="dataset/MellowDB_experiments"
   if [ ! -d "$DATASET/source_data" ] || [ ! -d "$DATASET/semantic_operations" ]; then
     echo "DATASUS dataset not found at '$DATASET' (source_data/ + semantic_operations/)" >&2; exit 2
