@@ -1,7 +1,8 @@
 """
 When a newly registered evolution produces records that an already-registered
 evolution should have transformed further, the existing evolution must be
-reapplied to those records (the cascade in check_if_operation_affected_*).
+reapplied to those records: backward through the cascade, and forward by deriving
+the affected records again when the new evolution lands earlier in the chain.
 
 Regression context: the backward cascade never fired because the version
 lookup filtered on a non-existent field ('previous_version_number' instead of

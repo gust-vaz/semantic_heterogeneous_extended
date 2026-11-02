@@ -5,7 +5,6 @@ from pymongo import MongoClient, ASCENDING,DESCENDING
 from pymongo.write_concern import WriteConcern
 from pymongo.read_concern import ReadConcern
 from pymongo import ReadPreference
-from bson.objectid import ObjectId
 from datetime import datetime
 from .exceptions import MellowDBError
 from . import sharding
@@ -195,47 +194,56 @@ class Collection:
         """Switch the record-read node/mode at runtime without rebuilding the collection."""
         self._configure_read_source(read_uri, read_mode)
 
-    def version_id(self, VersionNumber):
-        """_id of the version with this number, the identity _evolution_list stores."""
-        return self._versions_r.find_one({'version_number': VersionNumber})['_id']
-
     def register_operation(self, OperationKey, SemanticOperationClass):
         self.semantic_operations[OperationKey] = SemanticOperationClass
 
-    def split_processed_records(self, FieldName, ValueFilter, SpanVersion, EvolvedValue, Direction, EvolutionId, BoundaryVersion=None):
-        """ Split every processed record matching {FieldName: ValueFilter} whose version
-        range spans SpanVersion into two ranges at BoundaryVersion, evolving FieldName to
-        EvolvedValue on the new half. This is the core materialization step shared by all
-        semantic operations and their reapplications.
+    def split_processed_records(self, FieldName, ValueFilter, Version, EvolvedValue, Direction, EvolutionDate):
+        """ Apply one semantic evolution to the processed records it covers. This is the
+        core materialization step shared by all semantic operations and their reapplications.
+
+        A forward evolution covers records valid before its date and a backward one the rest
+        (paper, Definitions 3.3 and 3.4). It covers every row of such a record on the evolved
+        side of Version: a row crossing Version is cut in two, and a row already entirely on
+        that side, because an earlier operation cut it, is replaced. Only for an operation at
+        the end of the chain: one registered earlier in the chain goes through
+        rematerialize_records, since it can invalidate rows later operations derived.
 
         Args:
             FieldName(): field affected by the semantic operation
             ValueFilter(): value (or pymongo filter like {'$in': [...]}) the records carry
-            SpanVersion(): version number the record range must span ( _min <= SpanVersion < _max )
-            EvolvedValue(): value FieldName receives on the evolved half
-            Direction(): 'forward' = evolved half is [BoundaryVersion, _max); 'backward' = evolved half is [_min, BoundaryVersion)
-            EvolutionId(): _id of the version owning the operation (the one whose next_operation it is); query expansion finds both halves through it
-            BoundaryVersion(): version number where the split happens; defaults to SpanVersion
+            Version(): version number where the evolution takes effect
+            EvolvedValue(): value FieldName receives on the evolved side
+            Direction(): 'forward' = evolved side is [Version, _max); 'backward' = [_min, Version)
+            EvolutionDate(): date of the semantic operation
 
         """
-        if BoundaryVersion is None:
-            BoundaryVersion = SpanVersion
+        if Direction == 'forward':
+            eligible = {'$lt': EvolutionDate}
+            reaches = {'_max_version_number': {'$gt': Version}}
+            whole = {'_min_version_number': {'$gte': Version}}
+            evolved_range = {'_min_version_number': {'$max': ['$_min_version_number', Version]}}
+            original_range = {'_max_version_number': Version}
+        else:
+            eligible = {'$gte': EvolutionDate}
+            reaches = {'_min_version_number': {'$lt': Version}}
+            whole = {'_max_version_number': {'$lte': Version}}
+            evolved_range = {'_max_version_number': {'$min': ['$_max_version_number', Version]}}
+            original_range = {'_min_version_number': Version}
 
         match = {'$and': [
-            {'_min_version_number': {'$lte': SpanVersion}},
-            {'_max_version_number': {'$gt': SpanVersion}},
+            {'_valid_from': eligible},
+            reaches,
             {FieldName: ValueFilter},
             {FieldName: {'$ne': EvolvedValue}}
         ]}
 
-        if Direction == 'forward':
-            original_set = {'_max_version_number': BoundaryVersion}
-            evolved_set = {'_min_version_number': BoundaryVersion, FieldName: EvolvedValue}
-        else:
-            original_set = {'_min_version_number': BoundaryVersion}
-            evolved_set = {'_max_version_number': BoundaryVersion, FieldName: EvolvedValue}
-
-        evolved_set['_evolution_list'] = {'$setUnion': [{'$ifNull': ['$_evolution_list', []]}, [EvolutionId]]}
+        evolved_set = {
+            **evolved_range,
+            FieldName: {'$literal': EvolvedValue},
+            '_evoluted': True,
+            ## The value this record was stored with, which query terms are expressed in
+            f'_raw.{FieldName}': {'$ifNull': [f'$_raw.{FieldName}', f'${FieldName}']},
+        }
 
         ## Copy-and-evolve in one server-side pass. Unlike $out, $merge can target a
         ## sharded collection and can target the collection being read, so there is no
@@ -269,7 +277,9 @@ class Collection:
             if batch:
                 self._col_processed_w.insert_many(batch)
 
-        self._col_processed_w.update_many(match, {'$set': original_set, '$addToSet': {'_evolution_list': EvolutionId}})
+        ## Deleted rather than updated in place: the evolved field may be the shard key.
+        self._col_processed_w.delete_many({'$and': [match, whole]})
+        self._col_processed_w.update_many(match, {'$set': original_range})
 
 
     def insert_one(self, JsonString, ValidFromDate:datetime):
@@ -280,82 +290,135 @@ class Collection:
             valid_from_date(): date of when the register becomes valid. This is important in the treatment of semantic changes along time
         
         """               
-        self.update_versions()
-
-        versions = self._versions_r.find({'version_valid_from':{'$lte' : ValidFromDate}}).sort('version_valid_from',DESCENDING)
-        version = next(versions, None)                       
-        
-        self.__insert_one_by_version(JsonString, version['version_number'], ValidFromDate)                
+        versions = self.__version_chain()
+        version_number = versions[self.__version_position(versions, ValidFromDate)]['version_number']
+        self.__insert_one_by_version(JsonString, version_number, ValidFromDate, versions)
 
 
-    def __insert_one_by_version(self, JsonString, VersionNumber, ValidFromDate:datetime):        
-        o = json.loads(JsonString)                
-        o['_original_version']=VersionNumber                   
-        o['_valid_from'] = ValidFromDate    
+    def __version_chain(self):
+        """Every version, in chain order, which is also chronological order."""
+        return list(self._versions_r.find().sort('version_number', ASCENDING))
+
+    @staticmethod
+    def __version_position(versions, date):
+        """Where in the chain the semantic version a record valid at `date` was born in sits."""
+        return sum(1 for version in versions if version['version_valid_from'] <= date) - 1
+
+    def __materialized_rows(self, record, versions):
+        """Every processed row of one record: its original row, then a step along the chain
+        each time an operation changes it, forward and backward (paper, Algorithm 3).
+
+        Walking the chain in order is the point. The value a record carries when it reaches
+        an operation decides whether that operation applies, so operations cannot be
+        considered independently of one another.
+        """
+        position = self.__version_position(versions, record['_valid_from'])
+
+        def evolved_from(row, field, value, lower, upper):
+            return {**row, field: value, '_evoluted': True,
+                    '_raw': {field: record[field], **row['_raw']},
+                    '_min_version_number': lower, '_max_version_number': upper}
+
+        def affects(operation, row):
+            sources = operation['from'] if isinstance(operation['from'], list) else [operation['from']]
+            return operation['field'] in row and row[operation['field']] in sources
+
+        forward = dict(record)
+        rows = []
+        lower = float('-inf')
+        for index in range(position, len(versions) - 1):
+            operation = versions[index]['next_operation']
+            if (self.semantic_operations[operation['type']].forward_reapplicable
+                    and affects(operation, forward)):
+                boundary = versions[index + 1]['version_number']
+                rows.append({**forward, '_min_version_number': lower, '_max_version_number': boundary})
+                forward = evolved_from(forward, operation['field'], operation['to'], boundary, float('inf'))
+                lower = boundary
+        rows.append({**forward, '_min_version_number': lower, '_max_version_number': float('inf')})
+
+        backward = rows[0]
+        for index in range(position, 0, -1):
+            operation = versions[index]['previous_operation']
+            if (self.semantic_operations[operation['type']].backward_reapplicable
+                    and affects(operation, backward)):
+                boundary = versions[index]['version_number']
+                backward['_min_version_number'] = boundary
+                backward = evolved_from(backward, operation['field'], operation['to'],
+                                        float('-inf'), boundary)
+                rows.append(backward)
+
+        return rows
+
+    def rematerialize_records(self, field, values):
+        """Derive again every row of the records an operation registered earlier in the chain
+        can reach. Such an operation changes what later operations see, so rows already derived
+        from them may no longer exist in the new chain; only a replay from the stored record
+        can tell.
+        """
+        versions = self.__version_chain()
+        operations = [version['next_operation'] for version in versions
+                      if version.get('next_operation') and version['next_operation']['field'] == field]
+
+        def values_of(operation):
+            return [*(operation['from'] if isinstance(operation['from'], list) else [operation['from']]),
+                    *(operation['to'] if isinstance(operation['to'], list) else [operation['to']])]
+
+        ## Everything connected through the chain: a record can arrive at an affected value
+        ## from any of these, and a later row can start from one.
+        affected = set(values)
+        grown = True
+        while grown:
+            grown = False
+            for operation in operations:
+                involved = set(values_of(operation))
+                if involved & affected and not involved <= affected:
+                    affected |= involved
+                    grown = True
+
+        batch = []
+        for stored in self.collection.find({field: {'$in': list(affected)}}):
+            batch.append(stored)
+            if len(batch) == self._CLIENT_SPLIT_BATCH:
+                self.__replace_rows(batch, versions)
+                batch = []
+        if batch:
+            self.__replace_rows(batch, versions)
+
+    def __replace_rows(self, stored_records, versions):
+        rows = []
+        for stored in stored_records:
+            record = {key: value for key, value in stored.items() if key != '_id'}
+            record.update(_original_id=stored['_id'], _evoluted=False, _raw={},
+                          _original_version=versions[self.__version_position(versions, stored['_valid_from'])]['version_number'])
+            rows.extend(self.__materialized_rows(record, versions))
+        self._col_processed_w.delete_many({'_original_id': {'$in': [stored['_id'] for stored in stored_records]}})
+        self._col_processed_w.insert_many(rows)
+
+    def __insert_one_by_version(self, JsonString, VersionNumber, ValidFromDate:datetime, versions):
+        o = json.loads(JsonString)
+        o['_original_version']=VersionNumber
+        o['_valid_from'] = ValidFromDate
 
         for key, value in o.items():
             if isinstance(value, str) and re.match(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}', value):
-                o[key] = datetime.fromisoformat(value)                                    
+                o[key] = datetime.fromisoformat(value)
 
         insertedDocument = self._col_w.insert_one(o)
 
         if self.operation_mode != 'preprocess':
             return
 
-        p = json.loads(JsonString)        
+        p = json.loads(JsonString)
         p['_original_id'] = insertedDocument.inserted_id
         p['_original_version'] = VersionNumber
         p['_valid_from'] = ValidFromDate
         p['_evoluted'] = False
-        p['_evolution_list'] = []    
-        
+        p['_raw'] = {}
 
-        ##Ideia é checar aqui se pode ter tido alterações semanticas para cada tipo,
-        #dado que parametros sao diferentes. Ai splitar ja os processados e talvez ate processar 
-        #na hora. Assim nao preciso ficar checando na consulta mais. 
-        
-        check_list = list()                
-        insertion_list = list()                
+        self._col_processed_w.insert_many(self.__materialized_rows(p, versions))
+
         minVersion = float('-inf')
         maxVersion = float('inf')
-        p['_min_version_number'] = minVersion
-        p['_max_version_number'] = maxVersion
-        check_list.append(p)        
-
-        while len(check_list) > 0:
-            document = check_list.pop()           
-
-            for operationType in self.semantic_operations:
-                if operationType in ['merging','translation','splitting','grouping','ungrouping']:
-                    affected_versions = self.semantic_operations[operationType].check_if_affected(document)                                       
-                    
-                    if affected_versions != None:                                           
-                        for v in affected_versions:
-                            if v[2] == 'forward':
-                                operation = self.versions_df.loc[(self.versions_df['next_version'] == v[1])]
-                                new_document = self.semantic_operations[operation['next_operation.type'].values[0]].evolute_forward(document, operation)                                
-                                new_document['_min_version_number'] = v[1]
-                                document['_max_version_number'] = v[0]
-                                new_document['_evoluted'] = True
-                                document['_evolution_list'] = document['_evolution_list'] + [operation['_id'].values[0]]
-                                new_document['_evolution_list'] = list(document['_evolution_list'])
-                                check_list.append(new_document)
-                            else:
-                                operation = self.versions_df.loc[(self.versions_df['previous_version'] == v[1])]
-                                new_document = self.semantic_operations[operation['previous_operation.type'].values[0]].evolute_backward(document, operation)                                
-                                new_document['_max_version_number'] = v[1]
-                                document['_min_version_number'] = v[0]
-                                new_document['_evoluted'] = True
-                                owner = self.versions_df.loc[self.versions_df['version_number'] == v[1], '_id'].values[0]
-                                document['_evolution_list'] = document['_evolution_list'] + [owner]
-                                new_document['_evolution_list'] = list(document['_evolution_list'])
-                                check_list.append(new_document)
-
-            insertion_list.append(document)  ## If affected versions, document limits already updated when arrived here    
-        
-
-        self._col_processed_w.insert_many(insertion_list)
-
         new_fields = list()
         for field in o:
             if not field.startswith('_'):
@@ -366,7 +429,7 @@ class Collection:
 
         if len(new_fields) > 0:
             self._col_columns_w.insert_many(new_fields)
-        
+
 
     def insert_many_by_csv(self, FilePath, ValidFromField, ValidFromDateFormat='%Y-%m-%d', Delimiter=','):
         """ Insert many recorDs in the collection using a csv file. 
@@ -385,7 +448,7 @@ class Collection:
     
     def insert_many_by_dataframe(self, dataframe, ValidFromField):        
         all_versions = self._versions_r.find(projection=['version_valid_from','version_number'])
-        dates = pd.DataFrame(all_versions).sort_values(by='version_valid_from')
+        dates = pd.DataFrame(all_versions).sort_values(by=['version_valid_from','version_number'])
         dates = pd.concat([
             dates,
             pd.DataFrame([{'version_valid_from': datetime(2200, 12, 31), 'version_number': float('inf')}])
@@ -413,94 +476,194 @@ class Collection:
 
 
     def __insert_many_by_version(self, Group: pd.DataFrame):
-
-        processed_group = Group.copy()              
-        
-
         insertedDocuments = self._col_w.insert_many(Group.to_dict('records'))
 
         if self.operation_mode != 'preprocess':
-            return     
+            return
 
-        processed_group.insert(len(processed_group.columns),'_original_id', insertedDocuments.inserted_ids) 
-        
-        minVersion = float('-inf')
-        maxVersion = float('inf') 
- 
+        processed_group = Group.copy()
+        processed_group['_original_id'] = insertedDocuments.inserted_ids
         processed_group['_evoluted'] = False
-        processed_group['_min_version_number'] = minVersion
-        processed_group['_max_version_number'] = maxVersion
-        processed_group['_evolution_list'] = [[] for _ in range(len(processed_group))]
+        processed_group['_raw'] = [{} for _ in range(len(processed_group))]
+        records = processed_group.to_dict('records')
 
-        version_ids = dict(zip(self.versions_df['version_number'], self.versions_df['_id']))
+        versions = self.__version_chain()
+        if len(versions) == 1:
+            for record in records:
+                record['_min_version_number'] = float('-inf')
+                record['_max_version_number'] = float('inf')
+            self._col_processed_w.insert_many(records)
+            return
 
-        def tag_evolution(frame, owners):
-            frame['_evolution_list'] = [tags + [owner] for tags, owner in zip(frame['_evolution_list'], owners)]
+        rows = []
+        for record in records:
+            rows.extend(self.__materialized_rows(record, versions))
+        self._col_processed_w.insert_many(rows)
 
-        ### Verificação e processamento das alterações semanticas
-        cols = list(processed_group.columns)
-        recheck_group = processed_group.copy()
+    def __evolution_chain(self, fields=None):
+        """The registered semantic operations in chain order, read fresh for each query."""
+        query = {'next_operation': {'$ne': None}}
+        if fields is not None:
+            query['next_operation.field'] = {'$in': list(fields)}
 
-        i = 0
+        chain = []
+        for version in self._versions_r.find(query).sort('version_number', ASCENDING):
+            operation = version['next_operation']
+            semantic = self.semantic_operations[operation['type']]
+            chain.append({
+                'field': operation['field'],
+                'sources': operation['from'] if isinstance(operation['from'], list) else [operation['from']],
+                'targets': operation['to'] if isinstance(operation['to'], list) else [operation['to']],
+                'date': version['next_version_valid_from'],
+                'forward': semantic.forward_processable,
+                'backward': semantic.backward_processable,
+                'materialized': semantic.forward_reapplicable,
+            })
+        return chain
 
-        while len(recheck_group) > 0:
-            if i == 300:
-                raise MellowDBError(f'Semantic processing did not converge after 300 iterations; {len(recheck_group)} rows still pending')
+    @staticmethod
+    def __query_terms(field, value, chain):
+        """What a query for `value` means over the stored records, shared by both strategies.
 
-            i+=1
-            
-            g = recheck_group[cols].copy()
-            g['_row_uid'] = range(len(g)) ## per-row identity: removal by _original_id would also discard sibling rows of the same record
-            recheck_group = pd.DataFrame()
+        A set of (stored value, start, end): the records storing that value and valid in
+        [start, end), None meaning unbounded (paper, Equation 8). Each hop on a value lasts
+        until the next operation that moves that value on.
+        """
+        operations = [operation for operation in chain if operation['field'] == field]
+        terms = {(value, None, None)}
 
-            for operationType in self.semantic_operations:
-                affected_versions = self.semantic_operations[operationType].check_if_many_affected(g)
+        def forward(term, after):
+            for position in range(after + 1, len(operations)):
+                operation = operations[position]
+                if operation['forward'] and term in operation['sources']:
+                    for target in operation['targets']:
+                        end = next((later['date'] for later in operations[position + 1:]
+                                    if target in later['sources']), None)
+                        terms.add((target, operation['date'], end))
+                        forward(target, position)
 
-                for idx in range(len(affected_versions)):
-                    v = affected_versions[idx]
+        def backward(term, before):
+            for position in range(before - 1, -1, -1):
+                operation = operations[position]
+                if operation['backward'] and term in operation['targets']:
+                    for source in operation['sources']:
+                        start = next((earlier['date'] for earlier in reversed(operations[:position])
+                                      if source in earlier['targets']), None)
+                        terms.add((source, start, operation['date']))
+                        backward(source, position)
 
-                    versions_updated = False
+        forward(value, -1)
+        backward(value, len(operations))
+        return terms
 
-                    if v[2] == 'backward':
-                        altered = self.semantic_operations[operationType].evolute_many_backward(v[0], v[1])
-                        altered['_max_version_number'] = altered['previous_version']
-                        tag_evolution(altered, altered['previous_version'].map(version_ids))
-                        tag_evolution(v[1], v[1]['previous_version'].map(version_ids))
-                        v[1]['_min_version_number'] = v[1]['version_number'] #matched records before semantic evolution
+    @staticmethod
+    def __reachable_values(field, value, chain):
+        """Every value a record storing `value` can carry at the latest semantic version."""
+        reachable = {value}
+        for operation in chain:
+            if (operation['field'] == field and operation['materialized']
+                    and reachable.intersection(operation['sources'])):
+                reachable.update(operation['targets'])
+        return reachable
 
-                        recheck_group = pd.concat([recheck_group,altered, v[1]])
-                        alt_list = list(altered['_row_uid'])
-                        g=g.loc[~g['_row_uid'].isin(alt_list)]
+    @staticmethod
+    def __valid_in(start, end):
+        bounds = {}
+        if start is not None:
+            bounds['$gte'] = start
+        if end is not None:
+            bounds['$lt'] = end
+        return {'_valid_from': bounds} if bounds else {}
 
-                        if len(altered) >0:
-                            versions_updated = True
-                    else:
-                        altered = self.semantic_operations[operationType].evolute_many_forward(v[0], v[1])
-                        altered['_min_version_number'] = altered['next_version']
-                        tag_evolution(altered, altered['_id'])
-                        tag_evolution(v[1], v[1]['_id'])
-                        v[1]['_max_version_number'] = v[1]['version_number'] #matched records before semantic evolution
-                        recheck_group = pd.concat([recheck_group,altered, v[1]])
-                        alt_list = list(altered['_row_uid'])
-                        g=g.loc[~g['_row_uid'].isin(alt_list)]
+    @staticmethod
+    def __any_of(clauses):
+        return clauses[0] if len(clauses) == 1 else {'$or': clauses}
 
-                        if len(altered) >0:
-                            versions_updated = True
+    @staticmethod
+    def __expands(field, value):
+        """Only equality on a plain value has a meaning across evolutions."""
+        return not field.startswith('$') and not isinstance(value, (dict, list))
 
-                    if versions_updated: ## If there has been any alteration, affected versions must be checked under new min_version_number and max_version_number, to avoid a loop of alterations due to unupdated versions
-                        recheck_affected = pd.concat([g, altered[cols], (v[1])[cols]])
-                        affected_versions = self.semantic_operations[operationType].check_if_many_affected(recheck_affected)
-                        
-            
-            if len(g) > 0: # O que ta no g nao foi tocado por nenhuma alteração semantica e já pode ser inserido direto
-                self._col_processed_w.insert_many(g.drop(columns=['_row_uid']).to_dict('records'))
-        
-    
+    def __processed_term(self, field, term, start, end, chain):
+        """A stored-value term as a filter on the rows of the latest semantic version.
+
+        Filtering on the evolved value as well as on _raw is what keeps the query
+        targetable: an index or a shard key on the field still applies.
+        """
+        raw = f'_raw.{field}'
+        reachable = self.__reachable_values(field, term, chain)
+        if len(reachable) > 1:
+            clause = {field: {'$in': list(reachable)},
+                      '$or': [{raw: term}, {field: term, raw: None}]}
+        elif any(operation['field'] == field and operation['materialized']
+                 and term in operation['targets'] for operation in chain):
+            clause = {field: term, raw: None}
+        else:
+            clause = {field: term}
+        clause.update(self.__valid_in(start, end))
+        return clause
+
     def __process_query(self,QueryString):
-        forward = self.__process_query_forward(QueryString)
-        backward = self.__process_query_backward(QueryString)
+        expanded = [field for field, value in QueryString.items() if self.__expands(field, value)]
+        chain = self.__evolution_chain(expanded) if expanded else []
 
-        return {'$or':[forward, backward]}
+        clauses = []
+        for field, value in QueryString.items():
+            if field not in expanded:
+                clauses.append({field: value})
+                continue
+            clauses.append(self.__any_of([
+                self.__processed_term(field, term, start, end, chain)
+                for term, start, end in self.__query_terms(field, value, chain)]))
+
+        return {'$and': clauses} if clauses else {}
+
+    def __rewrite_values(self, QueryString):
+        """Equality queries in rewrite mode: the same terms as preprocess, on stored values,
+        with every record then projected to the latest semantic version (paper, Algorithm 2)."""
+        chain = self.__evolution_chain()
+
+        clauses = []
+        reachable = {}
+        for field, value in QueryString.items():
+            terms = self.__query_terms(field, value, chain)
+            clauses.append(self.__any_of([{field: term, **self.__valid_in(start, end)}
+                                          for term, start, end in terms]))
+            reachable[field] = set().union(*(self.__reachable_values(field, term, chain)
+                                             for term, _, _ in terms))
+
+        ## Only what can change a returned value: the whole chain on the other fields, and
+        ## on a queried field only the operations its matching values can go through.
+        evolutions = [
+            {'field': operation['field'], 'from': source,
+             'to': operation['targets'][0], 'date': operation['date']}
+            for operation in chain if operation['materialized']
+            for source in operation['sources']
+            if operation['field'] not in reachable or source in reachable[operation['field']]]
+
+        pipeline = [{'$match': {'$and': clauses} if clauses else {}}]
+        if evolutions:
+            pipeline.extend(self.__latest_version_projection(evolutions))
+        return self._collection_read.aggregate(pipeline)
+
+    @staticmethod
+    def __latest_version_projection(evolutions):
+        return [
+            {'$replaceRoot': {'newRoot': {'$reduce': {
+                'input': {'$literal': evolutions},
+                'initialValue': '$$ROOT',
+                'in': {'$let': {
+                    'vars': {'current': {'$arrayElemAt': [
+                        {'$filter': {'input': {'$objectToArray': '$$value'}, 'as': 'item',
+                                     'cond': {'$eq': ['$$item.k', '$$this.field']}}}, 0]}},
+                    'in': {'$cond': {
+                        'if': {'$and': [{'$eq': ['$$this.from', '$$current.v']},
+                                        {'$lt': ['$$value._valid_from', '$$this.date']}]},
+                        'then': {'$mergeObjects': [
+                            '$$value',
+                            {'$arrayToObject': [[{'k': '$$this.field', 'v': '$$this.to'}]]}]},
+                        'else': '$$value'}}}}}}}},
+        ]
 
 #################################### QUERY REWRITING #######################################################################
     def __check_regex(self, query_dict, previous_fieldValue, next_fieldValue):
@@ -939,149 +1102,6 @@ class Collection:
     
 ############################################################################################################################    
 
-    def __process_query_forward(self,QueryString):
-        queryTerms = {}        
-        
-        for field in QueryString.keys():             
-            queryTerms[field] = list()            
-            queryTerms[field].append(QueryString[field])
-
-            to_process = []
-            to_process.append(QueryString[field])
-
-            while len(to_process) > 0:
-                fieldValue = to_process.pop()
-                
-                #Lets be sure we do not get in an infinite loop here
-                if isinstance(fieldValue, tuple):                    
-                    fieldValueQ = fieldValue[0]
-                    q = {'next_operation.field':field,'next_operation.from':fieldValueQ, 'version_number':{'$gt': fieldValue[1]}}                    
-                else:                    
-                    fieldValueQ = fieldValue
-                    q = {'next_operation.field':field,'next_operation.from':fieldValueQ}
-                
-                versions = self._versions_r.count_documents(q)
-
-                version_number = None
-                version_id=None
-                if(versions > 0):
-                    versions = self._versions_r.find(q).sort('version_number')
-                    for version in versions:
-                        operation_type = version['next_operation']['type']
-
-                        if not self.semantic_operations[operation_type].forward_processable:
-                            continue
-
-                        fieldValue = version['next_operation']['to']
-                        version_number = version['version_number']
-                        version_id = version['_id']
-
-                        if isinstance(fieldValue, list):
-                            for f in fieldValue:
-                                to_process.append((f, version_number, version_id))
-                        else:
-                            to_process.append((fieldValue,version_number, version_id)) #besides from the original query, this value could also represent a record that were translated in the past from the original query term. Therefore, it must be considered in the query
-
-                if version_number == None:
-                    queryTerms[field].append(fieldValue)
-                else:
-                    if isinstance(fieldValue, list):
-                        for f in fieldValue:
-                            queryTerms[field].append((f,version_number,version_id))
-                    else:
-                        queryTerms[field].append((fieldValue,version_number, version_id))
-
-                
-        
-        ands = []
-
-        for field in queryTerms:
-            ors = []
-
-            for value in queryTerms[field]:
-                if isinstance(value,tuple):
-                    ors.append({'$and':[{field:value[0]},{'_evolution_list':ObjectId(value[2])}]})
-                else:
-                    ors.append({field:value})
-
-            ands.append({'$or' : ors})
-
-        finalQuery = {'$and' : ands}    
-        
-        return finalQuery
-
-    def __process_query_backward(self,QueryString):
-        queryTerms = {}        
-        
-        for field in QueryString.keys():             
-            queryTerms[field] = list()
-            queryTerms[field].append(QueryString[field])
-
-            to_process = []
-            to_process.append(QueryString[field])
-
-            while len(to_process) > 0:
-                fieldValue = to_process.pop()
-
-                #Lets be sure we do not get in an infinite loop here
-                if isinstance(fieldValue, tuple):                    
-                    fieldValueQ = fieldValue[0]
-                    q = {'previous_operation.field':field,'previous_operation.from':fieldValueQ, 'version_number':{'$lt': fieldValue[1]}}                    
-                else:                    
-                    fieldValueQ = fieldValue
-                    q = {'previous_operation.field':field,'previous_operation.from':fieldValueQ}
-                
-                versions = self._versions_r.count_documents(q)
-                version_number = None
-                version_id=None
-                if(versions > 0):
-                    versions = self._versions_r.find(q).sort('version_number', DESCENDING)
-                    for version in versions:
-                        operation_type = version['previous_operation']['type']
-                        
-                        if not self.semantic_operations[operation_type].backward_processable:
-                            continue
-                        
-                        fieldValue = version['previous_operation']['to']
-                        version_number = version['version_number']
-                        version_id = version['_id']                        
-
-                        if isinstance(fieldValue,list):
-                            for f in fieldValue:
-                                to_process.append((f,version_number,version_id))
-                        else:
-                            to_process.append((fieldValue,version_number, version_id)) #besides from the original query, this value could also represent a record that were translated in the past from the original query term. Therefore, it must be considered in the query                        
-                
-                if version_number == None:                    
-                    queryTerms[field].append(fieldValue)
-                else:
-                    if isinstance(fieldValue, list):
-                        for f in fieldValue:                            
-                            queryTerms[field].append((f,version_number,version_id))     
-                    else:                        
-                        queryTerms[field].append((fieldValue,version_number, version_id)) 
-
-                
-        
-        ands = []
-
-        for field in queryTerms:
-            ors = []
-
-            for value in queryTerms[field]:
-                if isinstance(value,tuple):
-                    ors.append({'$and':[{field:value[0]},{'_evolution_list':ObjectId(value[2])}]})
-                else:
-                    ors.append({field:value})
-
-            ands.append({'$or' : ors})
-
-        finalQuery = {'$and' : ands}    
-        
-        return finalQuery
-
-
-
     def count_documents(self, QueryString):
         finalQuery = self.__process_query(QueryString)        
         return self.__query_specific(finalQuery, isCount=True)
@@ -1102,6 +1122,8 @@ class Collection:
         if self.operation_mode == 'preprocess':            
             finalQuery = self.__process_query(QueryString)                          
             r = self.__query_specific(finalQuery)     
+        elif all(self.__expands(field, value) for field, value in QueryString.items()):
+            r = self.__rewrite_values(QueryString)
         else:
             r = self.__rewrite_and_query(QueryString)
 
@@ -1130,45 +1152,27 @@ class Collection:
         operations = pd.read_csv(filePath, sep=';') 
         operations = operations.sort_values(by=validFromColumn)
 
-        i = 0
+        pending = []
 
         for index, row in operations.loc[operations['type']=='translation'].iterrows():
-            i = i + 1
-            print('Executing translation ' + str(i))
-            self.execute_operation('translation', datetime.strptime(row['valid_from'], '%Y-%m-%d'), {'fieldName':row['field'], 'oldValue':row['from'], 'newValue':row['to']})            
+            pending.append(('translation', row['valid_from'], {'fieldName':row['field'], 'oldValue':row['from'], 'newValue':row['to']}))
 
         # Support both new and old operation names for merging/grouping
         for group in operations.loc[operations['type'].isin(['merging', 'grouping'])].groupby(['to','valid_from','field']):
-            i = i + 1
-            operation_name = 'merging' if 'merging' in operations['type'].values else 'grouping'
-            print('Executing merging ' + str(i))
-            self.execute_operation('merging', datetime.strptime(group[0][1], '%Y-%m-%d'), {'fieldName':group[0][2], 'oldValues':list(group[1]['from'].values), 'newValue':group[0][0]})            
+            pending.append(('merging', group[0][1], {'fieldName':group[0][2], 'oldValues':list(group[1]['from'].values), 'newValue':group[0][0]}))
 
         # Support both new and old operation names for splitting/ungrouping
         for group in operations.loc[operations['type'].isin(['splitting', 'ungrouping'])].groupby(['from','valid_from','field']):
-            i = i + 1
-            operation_name = 'splitting' if 'splitting' in operations['type'].values else 'ungrouping'
-            print('Executing splitting ' + str(i))
-            self.execute_operation('splitting', datetime.strptime(group[0][1], '%Y-%m-%d'), {'fieldName':group[0][2], 'oldValue':group[0][0], 'newValues':list(group[1]['to'].values)})            
+            pending.append(('splitting', group[0][1], {'fieldName':group[0][2], 'oldValue':group[0][0], 'newValues':list(group[1]['to'].values)}))
 
+        ## Chronological across the three types, so every operation lands at the end of the
+        ## chain and nothing has to be derived again. The sort is stable: same-date operations
+        ## keep the order above, which is the order they compose in.
+        pending.sort(key=lambda operation: operation[1])
+        for i, (operation_type, valid_from, arguments) in enumerate(pending, start=1):
+            print(f'Executing {operation_type} {i}')
+            self.execute_operation(operation_type, datetime.strptime(valid_from, '%Y-%m-%d'), arguments)
 
-    def check_if_operation_affected_forward(self, fieldName, newValue, version_number):
-        versions = self._versions_r.find({'$and': [{'next_operation.field' : fieldName},
-                                                                      {'next_operation.from' : newValue}, #We are checking if the informed evolution here affected any pre-existing evolutions so as to reprocess them. Gonna do it in both directions
-                                                                      {'next_version': {'$gt': version_number}}
-                                                        ]}).sort('next_version_valid_from',ASCENDING)
-
-        for version_change in versions:
-
-            # A previous evolution has been hit by this new evolution. We need to reprocess it.
-            semantic_evolution = self.semantic_operations[version_change['next_operation']['type']]
-
-            ## forward_reapplicable gates record reprocessing; forward_processable gates query expansion and runs in the opposite direction for grouping/ungrouping
-            if semantic_evolution.forward_reapplicable:
-                semantic_evolution.reapply_operation_forward(version_change)
-
-                ##Recheck
-                self.check_if_operation_affected_forward(version_change['next_operation']['field'], version_change['next_operation']['to'],version_change['next_version'])#Recheck if affected any other evolution
 
     def check_if_operation_affected_backward(self, fieldName, newValue,version_number):
         versions = self._versions_r.find({'$and': [{'previous_operation.field' : fieldName},

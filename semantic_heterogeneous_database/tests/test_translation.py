@@ -106,7 +106,7 @@ class TestTranslationPreprocess:
 
     # -----------------------------------------------------------------------
     # Ops-first backward: register evolution first, then insert a record with
-    # the NEW name.  This path calls evolute_backward() — the typo regression.
+    # the NEW name.  This path walks the chain backward — the typo regression.
     # -----------------------------------------------------------------------
 
     def test_ops_first_backward_no_crash(self, make_collection, count):

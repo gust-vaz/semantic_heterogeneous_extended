@@ -19,9 +19,9 @@ class TestChainedTranslations:
         The preprocess strategy materialises copies at write/evolution time.
         After A→B→C:
           * C is visible (current name, min=BC_version, max=+inf)
-          * B and A are visible through query expansion: their _max was fixed when
-            each operation ran, so neither row is visible at the current version
-            and both names reach the record's C copy through _evolution_list.
+          * B and A are visible through query expansion: their rows are not at the
+            current version, and both names reach the record's C row through the
+            value it was stored with.
         """
         col = make_collection("preprocess")
         col.insert_one('{"city": "A", "country": "X"}', datetime(1900, 1, 1))

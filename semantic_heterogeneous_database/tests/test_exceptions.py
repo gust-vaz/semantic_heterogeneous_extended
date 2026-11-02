@@ -35,10 +35,8 @@ def test_unsupported_direction_raises(make_collection):
     col = make_collection('preprocess')
     grouping = col.collection.semantic_operations['merging']
     with pytest.raises(UnsupportedDirectionError):
-        grouping.evolute_backward({}, None)
+        grouping.reapply_operation_backward({})
     ungrouping = col.collection.semantic_operations['splitting']
-    with pytest.raises(UnsupportedDirectionError):
-        ungrouping.evolute_forward({}, None)
 
 
 def test_missing_operation_argument_raises_invalid_arguments(make_collection):

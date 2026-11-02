@@ -2,10 +2,11 @@
 A preprocess query for a term that has since evolved must keep finding its records
 after the current version moves on.
 
-A processed copy of an evolved record only matches its old term through
-_evolution_list, which holds the _id of the version owning the operation.
-Regression context: d5d23b1 stopped writing those ids, so the old term only looked
-right while its operation was the newest one, through the inclusive version bound.
+An evolved row is at the latest semantic version under its new value, so the old
+term reaches it through the value the record was stored with (_raw).
+Regression context: d5d23b1 stopped writing what the query matched on, so the old term
+only looked right while its operation was the newest one, through the inclusive
+version bound.
 """
 from datetime import datetime
 
@@ -98,7 +99,7 @@ def test_old_term_survives_an_operation_inserted_earlier_in_the_chain(make_colle
 @pytest.mark.parametrize("how", INSERT_PATHS)
 def test_split_source_finds_its_fragments_after_a_later_operation(make_collection, how):
     col = make_collection("preprocess")
-    _insert(col, how, "S1")
+    _insert(col, how, "S1", valid_from=datetime(1960, 1, 1))
     fragment = _found(col, {"city": "S1"})
     col.execute_operation("splitting", datetime(1950, 1, 1),
                           {"fieldName": "city", "oldValue": "S", "newValues": ["S1", "S2"]})
@@ -147,20 +148,3 @@ def test_a_split_on_another_field_returns_each_record_once(make_collection):
     _translate(col, "country", "X", "Y", 1950)
 
     assert len(list(col.find_many({"city": "P"}))) == 1
-
-
-def test_bulk_and_single_insert_store_the_same_ids(make_collection):
-    single = make_collection("preprocess")
-    bulk = make_collection("preprocess")
-    for col, how in ((single, "insert_one"), (bulk, "bulk")):
-        _translate(col, "city", "A", "B", 1950)
-        _translate(col, "city", "B", "C", 2000)
-        _insert(col, how, "A")
-
-    def tags(col):
-        rank = {v["_id"]: v["version_number"]
-                for v in col.collection.collection_versions.find()}
-        return sorted((doc["city"], sorted(rank[t] for t in doc["_evolution_list"]))
-                      for doc in col.collection.collection_processed.find())
-
-    assert tags(single) == tags(bulk)

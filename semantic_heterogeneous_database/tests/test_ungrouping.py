@@ -82,8 +82,8 @@ class TestUngroupingPreprocess:
     def test_record_predates_split(self, make_collection, count):
         """
         A record with city='Hg1' is inserted BEFORE the split Pa1→[Hg1, Hg2].
-        The backward section creates a Pa1 copy for the pre-split era.
-        Querying Hg1 returns 1; querying Pa1 also returns 1 (the backward copy).
+        A reverse evolution only applies to records valid after the split (paper,
+        Definition 3.4), so this Hg1 was never Pa1: querying Pa1 returns nothing.
         """
         col = make_collection("preprocess")
         col.insert_one('{"city": "Hg1", "country": "F"}', datetime(1950, 4, 5))
@@ -93,8 +93,7 @@ class TestUngroupingPreprocess:
             {"fieldName": "city", "oldValue": "Pa1", "newValues": ["Hg1", "Hg2"]},
         )
         assert count(col, {"city": "Hg1"}) == 1
-        # Pa1 backward copy represents the Hg1 record in the pre-split era
-        assert count(col, {"city": "Pa1"}) == 1
+        assert count(col, {"city": "Pa1"}) == 0
 
     # -----------------------------------------------------------------------
     # Alias 'splitting'

@@ -1,7 +1,6 @@
 import datetime
 import random
 
-from bson.objectid import ObjectId
 from pymongo.write_concern import WriteConcern
 from pymongo.read_concern import ReadConcern
 
@@ -32,10 +31,9 @@ class SemanticOperation:
     Subclasses must set:
       - type_name: the operation type string stored in the versions collection
       - forward_processable / backward_processable: query expansion directions
-      - forward_reapplicable / backward_reapplicable: record reprocessing directions
-    and implement describe(), check_if_affected(), check_if_many_affected(),
-    plus the evolute_*/reapply_* methods of their supported directions.
-    Unsupported directions inherit a loud UnsupportedDirectionError default.
+      - forward_reapplicable / backward_reapplicable: record materialization directions
+    and implement describe(), plus reapply_operation_backward when records can
+    evolve backward. An unsupported direction raises a loud UnsupportedDirectionError.
     """
 
     type_name = None
@@ -46,27 +44,6 @@ class SemanticOperation:
     def describe(self, args) -> OperationSpec:
         """Validate args and return the OperationSpec for this operation."""
         raise NotImplementedError
-
-    def check_if_affected(self, Document):
-        raise NotImplementedError
-
-    def check_if_many_affected(self, DocumentsDataFrame):
-        raise NotImplementedError
-
-    def evolute_forward(self, Document, operation):
-        raise UnsupportedDirectionError(f'{self.type_name} cannot evolve records forward')
-
-    def evolute_backward(self, Document, operation):
-        raise UnsupportedDirectionError(f'{self.type_name} cannot evolve records backward')
-
-    def evolute_many_forward(self, field, DocumentOperationDataFrame):
-        raise UnsupportedDirectionError(f'{self.type_name} cannot evolve records forward')
-
-    def evolute_many_backward(self, field, DocumentOperationDataFrame):
-        raise UnsupportedDirectionError(f'{self.type_name} cannot evolve records backward')
-
-    def reapply_operation_forward(self, version_change):
-        raise UnsupportedDirectionError(f'{self.type_name} cannot be reapplied forward')
 
     def reapply_operation_backward(self, version_change):
         raise UnsupportedDirectionError(f'{self.type_name} cannot be reapplied backward')
@@ -79,29 +56,21 @@ class SemanticOperation:
         fieldName = spec.field
 
         # --- Read prev/next once to determine the version boundary for preprocessing ---
+        # Operations sharing a date stay in registration order: the chain position decides
+        # how they compose, so it must not depend on chance.
         previous_version = self.collection._versions_r.find_one(
-            {'version_valid_from': {'$lt': validFromDate}},
+            {'version_valid_from': {'$lte': validFromDate}},
             sort=[('version_valid_from', -1), ('version_number', -1)]
         )
         next_version_count = self.collection._versions_r.count_documents(
-            {'version_valid_from': {'$gte': validFromDate}}
+            {'version_valid_from': {'$gt': validFromDate}}
         )
 
         if next_version_count > 0:
-            next_versions = self.collection._versions_r.find(
-                {'version_valid_from': {'$gte': validFromDate}}
-            ).sort([('version_valid_from', 1), ('version_number', 1)])
-            next_version = next(next_versions, None)
-            if next_version and next_version['version_valid_from'] == validFromDate:
-                same_date_versions = [next_version] + [
-                    v for v in next_versions if v['version_valid_from'] == validFromDate
-                ]
-                if len(same_date_versions) > 1:
-                    next_version = random.choice(same_date_versions)
-                    previous_version = self.collection._versions_r.find_one(
-                        {'version_number': next_version['previous_version']},
-                        sort=[('version_valid_from', -1), ('version_number', -1)]
-                    )
+            next_version = self.collection._versions_r.find_one(
+                {'version_valid_from': {'$gt': validFromDate}},
+                sort=[('version_valid_from', 1), ('version_number', 1)]
+            )
             new_version_number = random.uniform(
                 previous_version['version_number'], next_version['version_number']
             )
@@ -110,36 +79,25 @@ class SemanticOperation:
             self.collection.current_version = self.collection.current_version + 1_000_000
             new_version_number = self.collection.current_version
 
-        new_version_id = ObjectId()
-
-        # An operation inserted mid-chain becomes the previous version's next_operation and
-        # hands that version's old one to the new version, so the records evolved by the
-        # old one must follow it. Done first: the split below tags with the previous id.
-        if self.collection.operation_mode == 'preprocess' and next_version_count > 0:
-            self.collection.collection_processed.update_many(
-                {'_evolution_list': previous_version['_id']},
-                {'$set': {'_evolution_list.$[owner]': new_version_id}},
-                array_filters=[{'owner': previous_version['_id']}]
-            )
-
-        # --- Preprocessing ($out cannot run in a transaction) ---
+        # --- Preprocessing ---
         # A direction is only record-processable when its evolution target is a
         # single value; a list target (merged sources, split fragments) is ambiguous.
-        if self.collection.operation_mode == 'preprocess':
+        # An operation registered earlier in the chain is handled after the chain is
+        # written, because what it changes depends on the operations after it.
+        if self.collection.operation_mode == 'preprocess' and next_version_count == 0:
             if not isinstance(spec.forward_from, list):
-                # Backward: records already carrying the newer value before the evolution date
+                # Backward: records carrying the newer value, valid from the evolution date on
                 self.collection.split_processed_records(
                     fieldName, _as_filter(spec.forward_to), new_version_number, spec.forward_from, 'backward',
-                    previous_version['_id'])
+                    validFromDate)
             if not isinstance(spec.forward_to, list):
-                # Forward: records carrying the older value that evolve after the date
+                # Forward: records carrying the older value, valid before the evolution date
                 self.collection.split_processed_records(
                     fieldName, _as_filter(spec.forward_from), new_version_number, spec.forward_to, 'forward',
-                    previous_version['_id'])
+                    validFromDate)
 
         # --- Version chain update (transaction-protected on replica sets) ---
         new_version = {
-            "_id": new_version_id,
             "current_version": 1 if next_version_count == 0 else 0,
             "version_valid_from": validFromDate,
             "previous_version": previous_version['version_number'],
@@ -204,6 +162,8 @@ class SemanticOperation:
         self.collection.update_versions()
 
         if self.collection.operation_mode == 'preprocess':
+            if next_version_count > 0:
+                self.collection.rematerialize_records(fieldName, spec.cascade_values)
+                return
             for value in spec.cascade_values:
-                self.collection.check_if_operation_affected_forward(fieldName, value, new_version_number)
                 self.collection.check_if_operation_affected_backward(fieldName, value, new_version_number)
