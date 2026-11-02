@@ -577,3 +577,32 @@ def test_run_refuses_b4_on_the_indexed_real_corpus(tmp_path):
     done = run("run.sh", "rs3", "--experiment", "b4", "--corpus", "real_indexed",
                "--dry-run", env=with_fake_gcloud(tmp_path))
     assert done.returncode == 2
+
+
+def test_provision_clones_the_configured_branch(tmp_path):
+    env = with_fake_gcloud(tmp_path)
+    env["REPO_BRANCH"] = "some-branch"
+    done = run("provision.sh", "rs3", "--dry-run", env=env)
+    assert done.returncode == 0, done.stderr
+    assert "repo-branch=some-branch" in done.stdout
+
+
+@pytest.mark.parametrize("deployment,experiment", [
+    ("sh4", "s3"), ("rs3", "b1"), ("single", "b2")])
+def test_run_detach_leaves_the_experiment_running_on_the_vm(tmp_path, deployment, experiment):
+    done = run("run.sh", deployment, "--experiment", experiment, "--profile", "medium",
+               "--detach", "--dry-run", env=with_fake_gcloud(tmp_path))
+    assert done.returncode == 0, done.stderr
+    out = done.stdout
+    assert f"docker run -d --name bench-{experiment}" in out
+    assert "docker run --rm --network host" not in out
+    # Nothing to bring back yet, and local results must not be cleared for it.
+    assert "compute scp" not in out
+    assert "rm -rf" not in out
+
+
+def test_run_records_the_git_sha_it_is_given(tmp_path):
+    env = with_fake_gcloud(tmp_path)
+    env["BENCH_GIT_SHA"] = "abc1234"
+    done = run("run.sh", "sh4", "--dry-run", env=env)
+    assert "BENCH_GIT_SHA='abc1234'" in done.stdout

@@ -10,8 +10,9 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$HERE/config.env"
 
-usage() { echo "Usage: ./run.sh <sh1|sh4|sh7|sh8|rs3|rs5|single> [--experiment s1..s5|b1..b4] [--profile smoke] [--corpus synthetic|real|real_indexed] [--dry-run]"; }
+usage() { echo "Usage: ./run.sh <sh1|sh4|sh7|sh8|rs3|rs5|single> [--experiment s1..s5|b1..b4] [--profile smoke] [--corpus synthetic|real|real_indexed] [--detach] [--dry-run]"; }
 DRY_RUN=0
+DETACH=0
 DEPLOYMENT=""
 EXPERIMENT=""
 PROFILE="smoke"
@@ -21,6 +22,7 @@ while [ $# -gt 0 ]; do
     --experiment) EXPERIMENT="$2"; shift 2 ;;
     --profile) PROFILE="$2"; shift 2 ;;
     --corpus) CORPUS="$2"; shift 2 ;;
+    --detach) DETACH=1; shift ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     sh1|sh4|sh7|sh8|rs3|rs5|single) DEPLOYMENT="$1"; shift ;;
@@ -62,7 +64,11 @@ fi
 # Provenance sha computed here: the VM's clone is owned by root (cloned by the
 # startup-script), so `git rev-parse` over SSH trips git's dubious-ownership guard
 # and returns nothing. The local checkout is the same pushed commit the VM ran.
-GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo '')"
+GIT_SHA="${BENCH_GIT_SHA:-$(git rev-parse --short HEAD 2>/dev/null || echo '')}"
+
+# --detach leaves the experiment running on the VM, so it outlives this SSH session;
+# whoever asked for that watches the container and brings the results back itself.
+if [ "$DETACH" -eq 1 ]; then DOCKER_RUN="docker run -d --name bench-${EXPERIMENT}"; else DOCKER_RUN="docker run --rm"; fi
 
 # The DATASUS dataset is git-ignored, so the VM's clone does not have it. It is
 # shipped once as a tarball (source CSVs + operations, ~50 MB compressed) into the
@@ -93,7 +99,7 @@ if [ "$KIND" = shard ]; then
     cd /opt/mellow/repo && \
     BENCH_GIT_SHA='${GIT_SHA}' \
     BENCH_ROUTER_URI='${ROUTER}' \
-    docker run --rm --network host -e BENCH_ROUTER_URI -e BENCH_GIT_SHA \
+    ${DOCKER_RUN} --network host -e BENCH_ROUTER_URI -e BENCH_GIT_SHA \
       -v \$PWD:/app -w /app mongo-runner:local \
       python -m ${MODULE} --deployment ${DEPLOYMENT} --profile ${PROFILE} --corpus ${CORPUS} --out results"
 elif [ "$KIND" = replicaset ]; then
@@ -119,7 +125,7 @@ elif [ "$KIND" = replicaset ]; then
     BENCH_GIT_SHA='${GIT_SHA}' \
     BENCH_PRIMARY_URI='${PRIMARY_URI}' \
     BENCH_SECONDARY_URIS='${SECONDARY_URIS}' \
-    docker run --rm --network host -e BENCH_PRIMARY_URI -e BENCH_SECONDARY_URIS -e BENCH_GIT_SHA \
+    ${DOCKER_RUN} --network host -e BENCH_PRIMARY_URI -e BENCH_SECONDARY_URIS -e BENCH_GIT_SHA \
       -v \$PWD:/app -w /app mongo-runner:local \
       python -m ${MODULE} --deployment ${DEPLOYMENT} --profile ${PROFILE} --corpus ${CORPUS} --out results"
 else
@@ -140,9 +146,14 @@ else
     cd /opt/mellow/repo && \
     BENCH_GIT_SHA='${GIT_SHA}' \
     BENCH_PRIMARY_URI='${PRIMARY_URI}' \
-    docker run --rm --network host -e BENCH_PRIMARY_URI -e BENCH_GIT_SHA \
+    ${DOCKER_RUN} --network host -e BENCH_PRIMARY_URI -e BENCH_GIT_SHA \
       -v \$PWD:/app -w /app mongo-runner:local \
       python -m ${MODULE} --deployment ${DEPLOYMENT} --profile ${PROFILE} --corpus ${CORPUS} --out results"
+fi
+
+if [ "$DETACH" -eq 1 ]; then
+  echo "Started ${EXPERIMENT} on ${DEPLOYMENT}, detached as bench-${EXPERIMENT}"
+  exit 0
 fi
 
 # Copy results back into a per-deployment directory. Cleared first so a repeated

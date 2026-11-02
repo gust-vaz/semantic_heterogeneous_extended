@@ -70,7 +70,7 @@ run gcloud compute instances create "${NAME_PREFIX}-${DEPLOYMENT}-control" \
   --zone="$GCP_ZONE" --machine-type="$CONTROL_MACHINE" \
   --subnet="${NET}-sub" --labels="${LABELS},role=control" \
   --metadata-from-file=startup-script="$HERE/bootstrap-control.sh" \
-  --metadata=repo-branch=cloud-addition,repo-url="${REPO_URL}",kind="${KIND}"
+  --metadata=repo-branch="${REPO_BRANCH}",repo-url="${REPO_URL}",kind="${KIND}"
 
 # Data VMs: shard mongods, replica-set members, or a single standalone node.
 for i in $(seq 1 "$DATA_COUNT"); do
