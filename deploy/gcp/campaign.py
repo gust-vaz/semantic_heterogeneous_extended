@@ -186,6 +186,12 @@ class Campaign:
                 last_copy = time.time()
             time.sleep(POLL_S)
 
+    def pin_code(self, deployment, control):
+        """So a later push cannot make clusters of one campaign run different code."""
+        self.ssh_retrying(deployment, control,
+                          f"sudo git -C /opt/mellow/repo fetch -q origin && "
+                          f"sudo git -C /opt/mellow/repo checkout -q {self.args.sha}")
+
     def run_cluster(self, deployment):
         control = f"mellow-{deployment}-control"
         if not self.done(deployment, "provisioned"):
@@ -196,16 +202,16 @@ class Campaign:
         if not self.done(deployment, "ready"):
             self.log(deployment, "waiting for the VMs to boot")
             self.wait_for_boot(deployment, control)
-            # Pinned, so a later push cannot make clusters of one campaign run different code.
-            self.ssh_retrying(deployment, control,
-                              f"sudo git -C /opt/mellow/repo fetch -q origin && "
-                              f"sudo git -C /opt/mellow/repo checkout -q {self.args.sha}")
+            self.pin_code(deployment, control)
             if deployment.startswith("rs"):
                 self.required(deployment, "init-replicaset.sh", deployment)
             elif deployment.startswith("sh"):
                 self.required(deployment, "init-cluster.sh", deployment)
             self.mark(deployment, "ready")
-            self.log(deployment, f"ready at {self.args.sha[:7]}")
+        # Again on a resume, which may name a newer commit. A running experiment has
+        # already imported its code, and its rows keep the sha it was started with.
+        self.pin_code(deployment, control)
+        self.log(deployment, f"ready at {self.args.sha[:7]}")
         for experiment in PLAN[deployment]:
             if self.done(deployment, f"done-{experiment}"):
                 continue

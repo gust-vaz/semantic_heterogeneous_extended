@@ -157,3 +157,14 @@ def test_split_points_are_capped_by_the_domains_cardinality():
 
     assert len(split_points(_Client(), _Handle(), "k", 50)) == 4
     assert len(split_points(_Client(), _Handle(), "k", 3)) == 2
+
+
+def test_the_operation_is_dated_after_every_synthetic_record():
+    """A forward evolution only covers records valid before its date, so one dated
+    inside the corpus would evolve a fraction of the value this experiment picked."""
+    from datetime import datetime
+
+    from benchmarks.experiments.s1_operation_cost import OPERATION_DATE
+
+    latest_record = datetime.fromordinal(365 * 2100)   # DatabaseGenerator.generate_record
+    assert OPERATION_DATE > latest_record

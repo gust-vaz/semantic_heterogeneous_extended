@@ -28,6 +28,11 @@ BALANCER = False
 CHAIN_LENGTH = 0
 WRITE_CONCERN = "majority"
 OPERATION_MODE = "preprocess"
+#: After every synthetic record, which end in 2099. A forward evolution only covers
+#: records valid before its date (paper, Definition 3.3), so a date inside the corpus
+#: would evolve only part of the value picked here and undo the coverage SKEW_LEVELS
+#: sets up. It also matches DATASUS, whose CID-9 records all predate their operation.
+OPERATION_DATE = datetime(2101, 1, 1)
 #: Each repetition draws a different corpus. A translation moves every copy to
 #: the one shard its new value routes to, so whether anything relocated is a
 #: single coin flip on one string's hash - and with a fixed seed that flip comes
@@ -200,7 +205,7 @@ def measure_cell(client, args, profile, cell, repetition, mongo_version):
         collection = open_collection(handle, uri)
         started = time.time()
         collection.execute_operation(
-            "translation", datetime(2021, 1, 1),
+            "translation", OPERATION_DATE,
             {"fieldName": evolving, "oldValue": old_value,
              "newValue": f"{old_value}__evolved"})
         apply_s = time.time() - started

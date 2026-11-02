@@ -12,7 +12,6 @@ it schemaless. This measures its price rather than leaving it implied.
 
 import sys
 import time
-from datetime import datetime
 
 from pymongo import MongoClient
 
@@ -21,6 +20,7 @@ from benchmarks.harness import corpus as corpus_module
 from benchmarks.harness import shard_runner, topology
 from benchmarks.harness.profiles import get_profile
 from benchmarks.experiments.s1_operation_cost import (
+    OPERATION_DATE,
     FIELDS, open_collection, pick_most_frequent_value,
 )
 
@@ -132,7 +132,7 @@ def main(argv=None):
                 collection = open_collection(handle, uri)
                 started = time.time()
                 collection.execute_operation(
-                    "translation", datetime(2021, 1, 1),
+                    "translation", OPERATION_DATE,
                     {"fieldName": evolving, "oldValue": old_value,
                      "newValue": f"{old_value}__evolved"})
                 apply_s = time.time() - started
