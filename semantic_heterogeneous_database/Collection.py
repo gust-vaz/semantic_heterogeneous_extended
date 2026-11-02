@@ -195,10 +195,14 @@ class Collection:
         """Switch the record-read node/mode at runtime without rebuilding the collection."""
         self._configure_read_source(read_uri, read_mode)
 
+    def version_id(self, VersionNumber):
+        """_id of the version with this number, the identity _evolution_list stores."""
+        return self._versions_r.find_one({'version_number': VersionNumber})['_id']
+
     def register_operation(self, OperationKey, SemanticOperationClass):
         self.semantic_operations[OperationKey] = SemanticOperationClass
 
-    def split_processed_records(self, FieldName, ValueFilter, SpanVersion, EvolvedValue, Direction, BoundaryVersion=None):
+    def split_processed_records(self, FieldName, ValueFilter, SpanVersion, EvolvedValue, Direction, EvolutionId, BoundaryVersion=None):
         """ Split every processed record matching {FieldName: ValueFilter} whose version
         range spans SpanVersion into two ranges at BoundaryVersion, evolving FieldName to
         EvolvedValue on the new half. This is the core materialization step shared by all
@@ -210,6 +214,7 @@ class Collection:
             SpanVersion(): version number the record range must span ( _min <= SpanVersion < _max )
             EvolvedValue(): value FieldName receives on the evolved half
             Direction(): 'forward' = evolved half is [BoundaryVersion, _max); 'backward' = evolved half is [_min, BoundaryVersion)
+            EvolutionId(): _id of the version owning the operation (the one whose next_operation it is); query expansion finds both halves through it
             BoundaryVersion(): version number where the split happens; defaults to SpanVersion
 
         """
@@ -229,6 +234,8 @@ class Collection:
         else:
             original_set = {'_min_version_number': BoundaryVersion}
             evolved_set = {'_max_version_number': BoundaryVersion, FieldName: EvolvedValue}
+
+        evolved_set['_evolution_list'] = {'$setUnion': [{'$ifNull': ['$_evolution_list', []]}, [EvolutionId]]}
 
         ## Copy-and-evolve in one server-side pass. Unlike $out, $merge can target a
         ## sharded collection and can target the collection being read, so there is no
@@ -262,7 +269,7 @@ class Collection:
             if batch:
                 self._col_processed_w.insert_many(batch)
 
-        self._col_processed_w.update_many(match, {'$set': original_set})
+        self._col_processed_w.update_many(match, {'$set': original_set, '$addToSet': {'_evolution_list': EvolutionId}})
 
 
     def insert_one(self, JsonString, ValidFromDate:datetime):
@@ -330,7 +337,8 @@ class Collection:
                                 new_document['_min_version_number'] = v[1]
                                 document['_max_version_number'] = v[0]
                                 new_document['_evoluted'] = True
-                                new_document['_evolution_list'].append(v[0])
+                                document['_evolution_list'] = document['_evolution_list'] + [operation['_id'].values[0]]
+                                new_document['_evolution_list'] = list(document['_evolution_list'])
                                 check_list.append(new_document)
                             else:
                                 operation = self.versions_df.loc[(self.versions_df['previous_version'] == v[1])]
@@ -338,7 +346,9 @@ class Collection:
                                 new_document['_max_version_number'] = v[1]
                                 document['_min_version_number'] = v[0]
                                 new_document['_evoluted'] = True
-                                new_document['_evolution_list'].append(v[0])
+                                owner = self.versions_df.loc[self.versions_df['version_number'] == v[1], '_id'].values[0]
+                                document['_evolution_list'] = document['_evolution_list'] + [owner]
+                                new_document['_evolution_list'] = list(document['_evolution_list'])
                                 check_list.append(new_document)
 
             insertion_list.append(document)  ## If affected versions, document limits already updated when arrived here    
@@ -420,6 +430,12 @@ class Collection:
         processed_group['_evoluted'] = False
         processed_group['_min_version_number'] = minVersion
         processed_group['_max_version_number'] = maxVersion
+        processed_group['_evolution_list'] = [[] for _ in range(len(processed_group))]
+
+        version_ids = dict(zip(self.versions_df['version_number'], self.versions_df['_id']))
+
+        def tag_evolution(frame, owners):
+            frame['_evolution_list'] = [tags + [owner] for tags, owner in zip(frame['_evolution_list'], owners)]
 
         ### Verificação e processamento das alterações semanticas
         cols = list(processed_group.columns)
@@ -448,6 +464,8 @@ class Collection:
                     if v[2] == 'backward':
                         altered = self.semantic_operations[operationType].evolute_many_backward(v[0], v[1])
                         altered['_max_version_number'] = altered['previous_version']
+                        tag_evolution(altered, altered['previous_version'].map(version_ids))
+                        tag_evolution(v[1], v[1]['previous_version'].map(version_ids))
                         v[1]['_min_version_number'] = v[1]['version_number'] #matched records before semantic evolution
 
                         recheck_group = pd.concat([recheck_group,altered, v[1]])
@@ -459,6 +477,8 @@ class Collection:
                     else:
                         altered = self.semantic_operations[operationType].evolute_many_forward(v[0], v[1])
                         altered['_min_version_number'] = altered['next_version']
+                        tag_evolution(altered, altered['_id'])
+                        tag_evolution(v[1], v[1]['_id'])
                         v[1]['_max_version_number'] = v[1]['version_number'] #matched records before semantic evolution
                         recheck_group = pd.concat([recheck_group,altered, v[1]])
                         alt_list = list(altered['_row_uid'])
@@ -1095,7 +1115,7 @@ class Collection:
             VersionNumber = self.current_version
 
         Query['_min_version_number'] = {'$lte' : VersionNumber} ##Retornando registros traduzidos.
-        Query['_max_version_number'] = {'$gte' : VersionNumber} ##Retornando registros traduzidos. 
+        Query['_max_version_number'] = {'$gt' : VersionNumber} ##Retornando registros traduzidos. 
 
         if isCount:
             return self._processed_read.count_documents(Query)

@@ -3,15 +3,6 @@
 How does query cost grow as semantic operations stack up, and does the strategy
 change the shape of that growth? Read-only workload over corpora built with
 increasing chain lengths.
-
-The synthetic corpus is chained: one linear translation chain v0 -> ... -> vN,
-with every query on a chain value, so resolving a query follows all N hops. The
-default corpus would not do: its operations never share a value, so a query
-goes through at most one of them and "depth" would only be operation count.
-With two or more chained translations, preprocess stops finding the original
-value (a limitation the library documents in its test_chained.py), so the two
-strategies do not return the same records here - compare their costs knowing
-that.
 """
 
 import sys
@@ -22,17 +13,7 @@ from benchmarks.harness.profiles import get_profile
 from benchmarks.harness.workload import run_workload
 
 EXPERIMENT = "b4"
-#: Capped at 10. On the chained corpus, applying the chain to the preprocess corpus
-#: costs exponentially more per hop: Collection re-applies every earlier operation
-#: through a full scan (split_processed_records) and recurses twice. Measured at
-#: 100k records on 2 GB nodes, setup_operations_s went 0.9 s -> 17.9 s -> 1001 s for
-#: c = 1, 5, 10 on one node (1.3 -> 28 -> 1264 s on a 3-node set), and c=15 was
-#: projected at 10-20 hours per cluster.
 CHAIN_LENGTHS = [1, 5, 10]
-#: The value domain is sized for a chain of 15, not for the longest chain in the
-#: sweep. That is what the first campaign built (60 values); shrinking it to suit
-#: the lower cap would change the records and queries, and rows already collected
-#: would stop being comparable with new ones.
 VALUE_DOMAIN = corpus_module.domain_for_chain(15)
 OPERATION_MODES = ["preprocess", "rewrite"]
 WRITE_CONCERN = "majority"

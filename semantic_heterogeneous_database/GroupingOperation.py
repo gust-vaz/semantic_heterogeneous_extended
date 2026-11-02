@@ -107,7 +107,8 @@ class GroupingOperation(SemanticOperation):
         operation = version_change['next_operation']
         self.collection.split_processed_records(
             operation['field'], {'$in': operation['from']},
-            version_change['next_version'], operation['to'], 'forward'
+            version_change['next_version'], operation['to'], 'forward',
+            version_change['_id']
         )
 
         ##Recheck

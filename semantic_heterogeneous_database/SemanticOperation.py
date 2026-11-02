@@ -1,6 +1,7 @@
 import datetime
 import random
 
+from bson.objectid import ObjectId
 from pymongo.write_concern import WriteConcern
 from pymongo.read_concern import ReadConcern
 
@@ -109,6 +110,18 @@ class SemanticOperation:
             self.collection.current_version = self.collection.current_version + 1_000_000
             new_version_number = self.collection.current_version
 
+        new_version_id = ObjectId()
+
+        # An operation inserted mid-chain becomes the previous version's next_operation and
+        # hands that version's old one to the new version, so the records evolved by the
+        # old one must follow it. Done first: the split below tags with the previous id.
+        if self.collection.operation_mode == 'preprocess' and next_version_count > 0:
+            self.collection.collection_processed.update_many(
+                {'_evolution_list': previous_version['_id']},
+                {'$set': {'_evolution_list.$[owner]': new_version_id}},
+                array_filters=[{'owner': previous_version['_id']}]
+            )
+
         # --- Preprocessing ($out cannot run in a transaction) ---
         # A direction is only record-processable when its evolution target is a
         # single value; a list target (merged sources, split fragments) is ambiguous.
@@ -116,14 +129,17 @@ class SemanticOperation:
             if not isinstance(spec.forward_from, list):
                 # Backward: records already carrying the newer value before the evolution date
                 self.collection.split_processed_records(
-                    fieldName, _as_filter(spec.forward_to), new_version_number, spec.forward_from, 'backward')
+                    fieldName, _as_filter(spec.forward_to), new_version_number, spec.forward_from, 'backward',
+                    previous_version['_id'])
             if not isinstance(spec.forward_to, list):
                 # Forward: records carrying the older value that evolve after the date
                 self.collection.split_processed_records(
-                    fieldName, _as_filter(spec.forward_from), new_version_number, spec.forward_to, 'forward')
+                    fieldName, _as_filter(spec.forward_from), new_version_number, spec.forward_to, 'forward',
+                    previous_version['_id'])
 
         # --- Version chain update (transaction-protected on replica sets) ---
         new_version = {
+            "_id": new_version_id,
             "current_version": 1 if next_version_count == 0 else 0,
             "version_valid_from": validFromDate,
             "previous_version": previous_version['version_number'],
@@ -181,17 +197,13 @@ class SemanticOperation:
                     write_concern=WriteConcern(w='majority'),
                     read_concern=ReadConcern('snapshot')
                 ):
-                    i = _write_version_chain(session=session)
+                    _write_version_chain(session=session)
         else:
-            i = _write_version_chain()
+            _write_version_chain()
 
         self.collection.update_versions()
 
         if self.collection.operation_mode == 'preprocess':
-            self.collection.collection_processed.update_many(
-                {'_evolution_list': previous_version['_id']},
-                {'$push': {'_evolution_list': i.inserted_id}}
-            )
             for value in spec.cascade_values:
                 self.collection.check_if_operation_affected_forward(fieldName, value, new_version_number)
                 self.collection.check_if_operation_affected_backward(fieldName, value, new_version_number)

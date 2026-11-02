@@ -137,7 +137,8 @@ class TranslationOperation(SemanticOperation):
         operation = version_change['next_operation']
         self.collection.split_processed_records(
             operation['field'], operation['from'],
-            version_change['next_version'], operation['to'], 'forward'
+            version_change['next_version'], operation['to'], 'forward',
+            version_change['_id']
         )
 
         ##Recheck
@@ -149,6 +150,7 @@ class TranslationOperation(SemanticOperation):
         self.collection.split_processed_records(
             operation['field'], operation['from'],
             version_change['previous_version'], operation['to'], 'backward',
+            self.collection.version_id(version_change['previous_version']),
             BoundaryVersion=version_change['version_number']
         )
 

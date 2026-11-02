@@ -115,6 +115,7 @@ class UngroupingOperation(SemanticOperation):
         self.collection.split_processed_records(
             operation['field'], {'$in': operation['from']},
             version_change['previous_version'], operation['to'], 'backward',
+            self.collection.version_id(version_change['previous_version']),
             BoundaryVersion=version_change['version_number']
         )
 

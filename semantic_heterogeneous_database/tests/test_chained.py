@@ -19,17 +19,9 @@ class TestChainedTranslations:
         The preprocess strategy materialises copies at write/evolution time.
         After A→B→C:
           * C is visible (current name, min=BC_version, max=+inf)
-          * B is visible (intermediate, max=BC_version, still ≥ current_version
-            because the boundary is inclusive)
-          * A is NOT visible: A's _max was fixed at AB_version when A→B ran, but
-            the current version advanced to BC_version > AB_version.
-            The _evolution_list-based expansion that should bridge this gap relies
-            on ObjectId matching against lists that contain floats (a known
-            implementation limitation), so the expansion finds nothing.
-
-        This documents a known limitation of the preprocess strategy for chained
-        evolutions; the rewrite strategy handles this correctly (see the sibling
-        test below).
+          * B and A are visible through query expansion: their _max was fixed when
+            each operation ran, so neither row is visible at the current version
+            and both names reach the record's C copy through _evolution_list.
         """
         col = make_collection("preprocess")
         col.insert_one('{"city": "A", "country": "X"}', datetime(1900, 1, 1))
@@ -45,9 +37,7 @@ class TestChainedTranslations:
         )
         assert count(col, {"city": "C"}) == 1
         assert count(col, {"city": "B"}) == 1
-        # Known limitation: the original A name is not visible at the current
-        # version in preprocess mode when more than one chained translation exists.
-        assert count(col, {"city": "A"}) == 0
+        assert count(col, {"city": "A"}) == 1
 
     def test_a_to_b_to_c_rewrite(self, make_collection):
         """Rewrite mode: chained A→B→C translations."""
