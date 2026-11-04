@@ -203,6 +203,32 @@ def test_the_transition_corpus_loads_only_those_years(tmp_path, primary_uri, cle
     assert ["cid"] in _indexed_fields(primary_uri, handle, "_processed")
 
 
+def test_the_transition_corpus_indexes_every_queried_field_before_its_operations(
+        tmp_path, primary_uri, cleanup_corpus, monkeypatch):
+    """Without them each of the 70 municipio operations scans the whole processed
+    collection several times: two minutes apiece on 2M documents, measured on sh1.
+    Indexing all three query fields also keeps an index out of S3's comparisons."""
+    from semantic_heterogeneous_database import BasicCollection
+
+    order = []
+    real_index = BasicCollection.create_index
+    real_operations = BasicCollection.execute_many_operations_by_csv
+    monkeypatch.setattr(BasicCollection, "create_index",
+                        lambda self, fields: (order.append(("index", tuple(fields))),
+                                              real_index(self, fields)))
+    monkeypatch.setattr(BasicCollection, "execute_many_operations_by_csv",
+                        lambda self, *a: (order.append(("operations",)),
+                                          real_operations(self, *a)))
+    root = _windowed_dataset(tmp_path, TRANSITION_OPERATIONS)
+    handle = cleanup_corpus(primary_uri, build_corpus(
+        "real_transition", primary_uri=primary_uri, operation_mode="preprocess",
+        dataset_root=root))
+    assert order == [("index", ("cid",)), ("index", ("municipio",)),
+                     ("index", ("UF",)), ("operations",)]
+    indexed = _indexed_fields(primary_uri, handle, "_processed")
+    assert all([field] in indexed for field in ("cid", "municipio", "UF"))
+
+
 def test_the_transition_corpus_queries_every_field_a_shard_key_can_name(
         tmp_path, primary_uri, cleanup_corpus):
     """S3 needs queries on the evolving fields (cid, municipio) and on the plain one

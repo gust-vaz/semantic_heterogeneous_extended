@@ -197,7 +197,7 @@ def apply_deferred_operations(collection, handle):
 def build_real(primary_uri, operation_mode, write_concern="majority",
                max_files=None, dataset_root=None, seed=42, shard_key=None,
                index=False, files=None, query_fields=(EVOLVING_FIELD,),
-               defer_field=None):
+               defer_field=None, index_before=()):
     """Load the DATASUS mortality corpus and apply the CID-9 -> CID-10 operations.
 
     `index=True` then indexes the queried field through the library's own
@@ -210,6 +210,8 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
     are the fields the query set samples, up to QUERY_SET_SIZE values each.
     `defer_field` leaves that field's operations out of the setup and hands them
     back on the handle, for an experiment that measures applying them.
+    `index_before` indexes those fields after the insert and before the
+    operations, which then find the records they evolve without a full scan.
     """
     root = dataset_root or DATASET_ROOT
     source = os.path.join(root, SOURCE_SUBDIR)
@@ -245,6 +247,13 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
     finally:
         if staging:
             shutil.rmtree(staging, ignore_errors=True)
+
+    if index_before:
+        start = time.time()
+        for index_field in index_before:
+            collection.create_index([index_field])
+        print(f"[corpus] indexes on {', '.join(index_before)} built in "
+              f"{time.time() - start:.1f} s", flush=True)
 
     operations_path = os.path.join(root, OPERATIONS_FILE)
     deferred = []
@@ -330,6 +339,12 @@ def build_corpus(kind, **kwargs):
             if os.path.isdir(source):
                 kwargs["files"] = transition_files(source)
             kwargs["query_fields"] = TRANSITION_QUERY_FIELDS
+            # Indexed before the operations: unindexed, each of the 70 municipio
+            # operations scans 2M processed documents several times, about two
+            # minutes apiece on sh1. Every query field gets one, so no S3
+            # comparison sets an indexed arm against an unindexed one.
+            kwargs["index"] = False
+            kwargs["index_before"] = TRANSITION_QUERY_FIELDS
         return build_real(**kwargs)
     raise ValueError(f"Unknown corpus '{kind}'. Choose: {', '.join(CORPUS_KINDS)}")
 
