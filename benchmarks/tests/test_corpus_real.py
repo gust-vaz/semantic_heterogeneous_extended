@@ -274,6 +274,25 @@ def test_deferring_a_field_leaves_its_operations_out_of_the_setup(
                                       "10 CAUSA 0", "10 CAUSA 1"}
 
 
+def test_deferred_operations_still_land_at_the_end_of_the_chain(
+        tmp_path, primary_uri, cleanup_corpus):
+    """An operation registered behind a later-dated one lands mid-chain and makes the
+    library re-derive every connected record - on 2M documents, a scan per batch,
+    and not what a new operation arriving costs. So the setup stops short of the
+    deferred operations' date, and later operations stay out of this corpus."""
+    later = "CIDADE 5;CIDADE OUTRA;translation;2000-01-01;municipio\n"
+    root = _windowed_dataset(tmp_path, TRANSITION_OPERATIONS + later)
+    handle = cleanup_corpus(primary_uri, build_corpus(
+        "real_transition", primary_uri=primary_uri, operation_mode="preprocess",
+        dataset_root=root, defer_field="cid"))
+    versions = MongoClient(primary_uri)[handle.database_name][
+        handle.collection_name + "_versions"]
+    froms = [document["next_operation"]["from"]
+             for document in versions.find({"next_operation": {"$ne": None}})]
+    assert froms == ["CIDADE 3"]
+    assert len(handle.deferred_operations) == 3
+
+
 def test_applying_the_deferred_operations_gives_the_corpus_a_full_setup_would(
         tmp_path, primary_uri, cleanup_corpus):
     from semantic_heterogeneous_database import BasicCollection

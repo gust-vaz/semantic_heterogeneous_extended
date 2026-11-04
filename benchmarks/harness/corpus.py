@@ -261,7 +261,14 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
         operations = pd.read_csv(operations_path, sep=OPERATIONS_SEPARATOR, dtype=str,
                                  keep_default_na=False)
         deferred = operations[operations["field"] == defer_field].to_dict("records")
-        kept = operations[operations["field"] != defer_field]
+        # Only what predates the deferred operations, so they still land at the end
+        # of the chain. Behind a later-dated operation they would land mid-chain,
+        # and the library would re-derive every connected record instead - a scan
+        # per batch on 2M documents, and not what a new operation arriving costs.
+        # ISO dates compare correctly as strings.
+        first = min((row["valid_from"] for row in deferred), default=None)
+        kept = operations[(operations["field"] != defer_field)
+                          & ((first is None) | (operations["valid_from"] < first))]
         operations_staging = tempfile.mkdtemp(prefix="bench_operations_")
         operations_path = os.path.join(operations_staging, "operations.csv")
         kept.to_csv(operations_path, sep=OPERATIONS_SEPARATOR, index=False)
