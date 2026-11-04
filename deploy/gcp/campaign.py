@@ -31,6 +31,22 @@ BOOT_LIMIT_S = 1500
 ATTEMPTS = 2
 
 
+def select_plan(deployments, experiments):
+    """PLAN cut down to these clusters and experiments (None keeps all), in plan order."""
+    known = {experiment for steps in PLAN.values() for experiment in steps}
+    unknown = sorted(set(deployments or []) - set(PLAN)) + sorted(set(experiments or []) - known)
+    if unknown:
+        raise ValueError(f"not in the plan: {', '.join(unknown)}")
+    plan = {}
+    for name, steps in PLAN.items():
+        if deployments is not None and name not in deployments:
+            continue
+        kept = [step for step in steps if experiments is None or step in experiments]
+        if kept:
+            plan[name] = kept
+    return plan
+
+
 def ips(deployment):
     return DATA_VMS[deployment] + 1
 
@@ -49,6 +65,8 @@ def fitting(pending, running):
 class Campaign:
     def __init__(self, args):
         self.args = args
+        self.plan = select_plan(getattr(args, "deployments", None),
+                                getattr(args, "experiments", None))
         self.root = os.path.abspath(args.results)
         self.state_dir = os.path.join(self.root, ".state")
         os.makedirs(self.state_dir, exist_ok=True)
@@ -212,7 +230,7 @@ class Campaign:
         # already imported its code, and its rows keep the sha it was started with.
         self.pin_code(deployment, control)
         self.log(deployment, f"ready at {self.args.sha[:7]}")
-        for experiment in PLAN[deployment]:
+        for experiment in self.plan[deployment]:
             if self.done(deployment, f"done-{experiment}"):
                 continue
             self.run_experiment(deployment, control, experiment)
@@ -238,7 +256,7 @@ class Campaign:
             self.mark(deployment, "failed")
 
     def run(self):
-        pending = [name for name in PLAN if not (self.done(name, "finished") or self.done(name, "failed"))]
+        pending = [name for name in self.plan if not (self.done(name, "finished") or self.done(name, "failed"))]
         running = {}
         while pending or running:
             for name, thread in list(running.items()):
@@ -249,7 +267,7 @@ class Campaign:
                 running[name] = threading.Thread(target=self.guarded, args=(name,), daemon=True)
                 running[name].start()
             time.sleep(10)
-        failed = [name for name in PLAN if self.done(name, "failed")]
+        failed = [name for name in self.plan if self.done(name, "failed")]
         self.script("teardown.sh", "sh7", "--all")
         with open(os.path.join(self.root, "summary.json"), "w") as handle:
             json.dump({"sha": self.args.sha, "failed": failed}, handle)
@@ -265,6 +283,10 @@ def main():
     parser.add_argument("--scripts", default=os.path.dirname(os.path.abspath(__file__)))
     parser.add_argument("--profile", default="medium")
     parser.add_argument("--corpus", default="synthetic")
+    parser.add_argument("--deployments", type=lambda text: text.split(","), default=None,
+                        help="Comma-separated clusters to run (default: the whole plan)")
+    parser.add_argument("--experiments", type=lambda text: text.split(","), default=None,
+                        help="Comma-separated experiments to run on them (default: all)")
     return Campaign(parser.parse_args()).run()
 
 

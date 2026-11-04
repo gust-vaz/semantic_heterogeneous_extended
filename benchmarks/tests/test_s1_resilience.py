@@ -22,7 +22,7 @@ def test_a_guard_failure_skips_the_cell_instead_of_aborting(monkeypatch, tmp_pat
     monkeypatch.setattr(s1.topology, "server_version", lambda uri: "8.0.12")
     monkeypatch.setattr(s1.shard_runner, "already_done", lambda *a, **k: set())
     monkeypatch.setattr(s1, "cells",
-                        lambda dep, anchor_only=False: [] if anchor_only else [bad, good])
+                        lambda dep, anchor_only=False, **kwargs: [] if anchor_only else [bad, good])
     monkeypatch.setattr(s1.results, "result_path",
                         lambda *a, **k: str(tmp_path / "s1.csv"))
 

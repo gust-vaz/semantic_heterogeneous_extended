@@ -32,6 +32,15 @@ class CorpusHandle:
     setup_operations_s: float
     record_count: int
     make_record: object = field(repr=False, default=None)
+    #: Operation rows build_real left out of the setup (see `defer_field`), for the
+    #: caller to apply and time with apply_deferred_operations.
+    deferred_operations: list = field(repr=False, default_factory=list)
+
+    @property
+    def deferred_values(self):
+        """Every value the deferred operations name, on either side."""
+        return ({row["from"] for row in self.deferred_operations}
+                | {row["to"] for row in self.deferred_operations})
 
 
 def drop_corpus(primary_uri, handle):
@@ -138,6 +147,21 @@ SOURCE_SUBDIR = "source_data"
 OPERATIONS_FILE = os.path.join("semantic_operations", "operations_cid9_cid10.csv")
 EVOLVING_FIELD = "cid"
 VALID_FROM_FIELD = "RefDate"
+OPERATIONS_SEPARATOR = ";"
+
+#: The years real_transition loads, inclusive. Every cid operation is dated
+#: 1996-01-01, the switch from CID-9 to CID-10, so a window around it keeps all
+#: of them at work: CID-9 records before it evolve forward, CID-10 records after
+#: it are what old terms find. 1988-2003 is the symmetric window closest to a
+#: third of the corpus - 16 of 43 files, 1,988,581 of 6,179,083 rows (32.2%),
+#: 43% of them CID-9 - and it names 116 of the 119 CID-9 source codes the
+#: operations use and every CID-10 target the data has.
+TRANSITION_YEARS = (1988, 2003)
+
+#: real_transition samples queries from each of these, so every shard key S3
+#: tries - the evolving cid, the also-evolving municipio, the untouched UF - has
+#: queries that name it.
+TRANSITION_QUERY_FIELDS = ("cid", "municipio", "UF")
 
 
 def dataset_available(root=None):
@@ -145,9 +169,35 @@ def dataset_available(root=None):
     return os.path.isdir(os.path.join(root, SOURCE_SUBDIR))
 
 
+def transition_files(source, years=TRANSITION_YEARS):
+    """The CSVs in `source` whose year (the name's last _-separated part) is in `years`."""
+    first, last = years
+    names = []
+    for name in sorted(os.listdir(source)):
+        stem, extension = os.path.splitext(name)
+        year = stem.rsplit("_", 1)[-1]
+        if extension == ".csv" and year.isdigit() and first <= int(year) <= last:
+            names.append(name)
+    return names
+
+
+def apply_deferred_operations(collection, handle):
+    """Apply the operations build_real deferred, through the same CSV path it uses."""
+    staging = tempfile.mkdtemp(prefix="bench_operations_")
+    path = os.path.join(staging, "operations.csv")
+    try:
+        pd.DataFrame(handle.deferred_operations,
+                     columns=["from", "to", "type", "valid_from", "field"]).to_csv(
+            path, sep=OPERATIONS_SEPARATOR, index=False)
+        collection.execute_many_operations_by_csv(path, 'type', 'valid_from')
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
 def build_real(primary_uri, operation_mode, write_concern="majority",
                max_files=None, dataset_root=None, seed=42, shard_key=None,
-               index=False):
+               index=False, files=None, query_fields=(EVOLVING_FIELD,),
+               defer_field=None):
     """Load the DATASUS mortality corpus and apply the CID-9 -> CID-10 operations.
 
     `index=True` then indexes the queried field through the library's own
@@ -155,6 +205,11 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
     under rewrite). Without it every query scans the whole corpus: at all 43
     files that is ~10M processed documents and ~60 s per read. Built after the
     operations, so setup_operations_s is unchanged; its time is only logged.
+
+    `files` names the CSVs to load and overrides `max_files`. `query_fields`
+    are the fields the query set samples, up to QUERY_SET_SIZE values each.
+    `defer_field` leaves that field's operations out of the setup and hands them
+    back on the handle, for an experiment that measures applying them.
     """
     root = dataset_root or DATASET_ROOT
     source = os.path.join(root, SOURCE_SUBDIR)
@@ -174,11 +229,13 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
     # just the first N files into a scratch folder rather than the whole set.
     staging = None
     folder = source
-    if max_files is not None:
+    if files is None and max_files is not None:
+        files = [name for name in sorted(os.listdir(source))[:max_files]
+                 if name.endswith(".csv")]
+    if files is not None:
         staging = tempfile.mkdtemp(prefix="bench_corpus_")
-        for name in sorted(os.listdir(source))[:max_files]:
-            if name.endswith(".csv"):
-                shutil.copy2(os.path.join(source, name), staging)
+        for name in files:
+            shutil.copy2(os.path.join(source, name), staging)
         folder = staging
 
     try:
@@ -189,9 +246,23 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
         if staging:
             shutil.rmtree(staging, ignore_errors=True)
 
+    operations_path = os.path.join(root, OPERATIONS_FILE)
+    deferred = []
+    if defer_field is not None:
+        operations = pd.read_csv(operations_path, sep=OPERATIONS_SEPARATOR, dtype=str,
+                                 keep_default_na=False)
+        deferred = operations[operations["field"] == defer_field].to_dict("records")
+        kept = operations[operations["field"] != defer_field]
+        operations_staging = tempfile.mkdtemp(prefix="bench_operations_")
+        operations_path = os.path.join(operations_staging, "operations.csv")
+        kept.to_csv(operations_path, sep=OPERATIONS_SEPARATOR, index=False)
+
     start = time.time()
-    collection.execute_many_operations_by_csv(
-        os.path.join(root, OPERATIONS_FILE), 'type', 'valid_from')
+    try:
+        collection.execute_many_operations_by_csv(operations_path, 'type', 'valid_from')
+    finally:
+        if defer_field is not None:
+            shutil.rmtree(operations_staging, ignore_errors=True)
     setup_operations_s = time.time() - start
 
     if index:
@@ -207,9 +278,12 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
     # Draw queries from the corpus's own values so they actually match records, from a
     # private generator: pymongo draws request ids from the global random module.
     rng = random.Random(seed)
+    query_set = []
+    for query_field in query_fields:
+        candidates = raw.distinct(query_field)
+        sample = rng.sample(candidates, min(QUERY_SET_SIZE, len(candidates)))
+        query_set += [{query_field: value} for value in sample]
     values = raw.distinct(EVOLVING_FIELD)
-    sample = rng.sample(values, min(QUERY_SET_SIZE, len(values)))
-    query_set = [{EVOLVING_FIELD: value} for value in sample]
 
     def make_record():
         record = {
@@ -226,6 +300,7 @@ def build_real(primary_uri, operation_mode, write_concern="majority",
         setup_operations_s=max(setup_operations_s, 1e-6),
         record_count=record_count,
         make_record=make_record,
+        deferred_operations=deferred,
     )
 
 
@@ -238,13 +313,26 @@ def build_corpus(kind, **kwargs):
     """
     if kind == "synthetic":
         kwargs.pop("max_files", None)
+        kwargs.pop("defer_field", None)
         return build_synthetic(**kwargs)
-    if kind in ("real", "real_indexed"):
-        kwargs["index"] = kind == "real_indexed"
+    if kind in REAL_KINDS:
+        kwargs["index"] = kind != "real"
         kwargs.pop("records", None)
         kwargs.pop("chain_length", None)
         kwargs.pop("domain", None)
         kwargs.pop("skew", None)
         kwargs.pop("chained", None)   # the real corpus brings its own operations
+        if kind == "real_transition":
+            # The window replaces the profile's file cap: a capped prefix of the
+            # sorted names is all CID-10, with nothing for the operations to evolve.
+            kwargs.pop("max_files", None)
+            source = os.path.join(kwargs.get("dataset_root") or DATASET_ROOT, SOURCE_SUBDIR)
+            if os.path.isdir(source):
+                kwargs["files"] = transition_files(source)
+            kwargs["query_fields"] = TRANSITION_QUERY_FIELDS
         return build_real(**kwargs)
-    raise ValueError(f"Unknown corpus '{kind}'. Choose: synthetic, real, real_indexed")
+    raise ValueError(f"Unknown corpus '{kind}'. Choose: {', '.join(CORPUS_KINDS)}")
+
+
+REAL_KINDS = ("real", "real_indexed", "real_transition")
+CORPUS_KINDS = ("synthetic",) + REAL_KINDS

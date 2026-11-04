@@ -21,7 +21,7 @@ from benchmarks.harness import shard_runner, topology
 from benchmarks.harness.profiles import get_profile
 from benchmarks.harness.workload import ClientSpec, run_workload
 from benchmarks.experiments.s1_operation_cost import (
-    FIELDS, chunks_needed, split_points,
+    chunks_needed, fields_for, split_points,
 )
 
 EXPERIMENT = "s3"
@@ -117,7 +117,7 @@ def main(argv=None):
     for role, kind, mode in cells(args.deployment):
         matrix_cell = next(entry for entry in cell_setup.SHARD_KEY_MATRIX
                            if entry["role"] == role and entry["kind"] == kind)
-        field = FIELDS[role]
+        field = fields_for(args.corpus)[role]
         wanted = [(mix, repetition)
                   for mix in ("targeted", "broadcast")
                   for repetition in range(profile["reps"])

@@ -10,7 +10,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=/dev/null
 source "$HERE/config.env"
 
-usage() { echo "Usage: ./run.sh <sh1|sh4|sh7|sh8|rs3|rs5|single> [--experiment s1..s5|b1..b4] [--profile smoke] [--corpus synthetic|real|real_indexed] [--detach] [--dry-run]"; }
+usage() { echo "Usage: ./run.sh <sh1|sh4|sh7|sh8|rs3|rs5|single> [--experiment s1..s5|b1..b4] [--profile smoke] [--corpus synthetic|real|real_indexed|real_transition] [--detach] [--dry-run]"; }
 DRY_RUN=0
 DETACH=0
 DEPLOYMENT=""
@@ -51,8 +51,8 @@ case "$EXPERIMENT" in
   *) echo "Unknown experiment '$EXPERIMENT'" >&2; exit 2 ;;
 esac
 case "$CORPUS" in
-  synthetic|real|real_indexed) ;;
-  *) echo "Unknown corpus '$CORPUS' (synthetic|real|real_indexed)" >&2; exit 2 ;;
+  synthetic|real|real_indexed|real_transition) ;;
+  *) echo "Unknown corpus '$CORPUS' (synthetic|real|real_indexed|real_transition)" >&2; exit 2 ;;
 esac
 # B4 sweeps the chain length it builds; the real corpus brings its own fixed
 # operations, so every cell would measure the same corpus. Refused before any

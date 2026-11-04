@@ -56,6 +56,19 @@ ANCHOR = {"skew": 3.0, "cardinality": 20}
 #: rewrites; `data` is one it never touches, which is the realistic production
 #: choice and the only row where a document can legitimately lack the key.
 FIELDS = {"id": "_id", "data": "f0", "evolved": "evo0"}
+#: The same roles on DATASUS: no operation touches `UF`, and the CID-9 -> CID-10
+#: transition rewrites `cid`.
+REAL_FIELDS = {"id": "_id", "data": "UF", "evolved": "cid"}
+
+
+def fields_for(corpus):
+    """Which field each shard key role points at, for this corpus."""
+    return FIELDS if corpus == "synthetic" else REAL_FIELDS
+
+
+def touched_filter(values, field):
+    """The documents an operation over `values` copies from, in either direction."""
+    return {field: {"$in": sorted(values)}}
 
 KEY_COLUMNS = ["experiment", "deployment", "corpus", "operation_mode",
                "shard_key_role", "shard_key_kind", "skew",
@@ -77,7 +90,7 @@ def pick_most_frequent_value(collection, field):
     return max(counts, key=counts.get)
 
 
-def cells(deployment, anchor_only=False):
+def cells(deployment, anchor_only=False, corpus="synthetic"):
     """The cells this deployment runs: the core, plus OFAT extensions on sh4.
 
     The core is the whole shard key matrix, which crossed with the deployments
@@ -85,7 +98,14 @@ def cells(deployment, anchor_only=False):
     other three axes vary one at a time from the anchor, because a full
     factorial would be 216 cells and the setup, not the measurement, is what
     costs.
+
+    On the real corpus skew and cardinality are whatever the data has, so the
+    core is all there is and both are recorded as None.
     """
+    if corpus != "synthetic":
+        return [dict(skew=None, cardinality=None, role=cell["role"], kind=cell["kind"],
+                     negative_control=cell["negative_control"])
+                for cell in cell_setup.SHARD_KEY_MATRIX]
     core = [dict(ANCHOR, role=cell["role"], kind=cell["kind"],
                  negative_control=cell["negative_control"])
             for cell in cell_setup.SHARD_KEY_MATRIX]
@@ -163,19 +183,24 @@ def measure_cell(client, args, profile, cell, repetition, mongo_version):
     corpus rather than paying for its own.
     """
     uri = shard_runner.router_uri(args.deployment)
-    field = FIELDS[cell["role"]]
+    fields = fields_for(args.corpus)
+    field = fields[cell["role"]]
+    evolving = fields["evolved"]
+    real = args.corpus != "synthetic"
     shard_count = topology.shard_count(args.deployment)
     label = (f"{args.deployment}/{cell['role']}-{cell['kind']}"
              f"/skew{cell['skew']}/card{cell['cardinality']}")
 
     cell_setup.prepare(client, args.chunk_size_mb, BALANCER)
+    ## On the real corpus the operation is the one the data brings: the setup
+    ## leaves the cid operations out, and applying them is what gets measured.
     handle = corpus_module.build_corpus(
         args.corpus, primary_uri=uri, records=profile["records"],
         chain_length=CHAIN_LENGTH, operation_mode=OPERATION_MODE,
         write_concern=WRITE_CONCERN, max_files=profile["real_max_files"],
         shard_key=cell_setup.key_pattern(field, cell["kind"]),
         skew=cell["skew"], domain=cell["cardinality"],
-        seed=BASE_SEED + repetition)
+        seed=BASE_SEED + repetition, defer_field=evolving if real else None)
     namespace = f"{handle.database_name}.{handle.collection_name}_processed"
 
     try:
@@ -195,20 +220,25 @@ def measure_cell(client, args, profile, cell, repetition, mongo_version):
         cell_setup.assert_distribution(
             before, cell_setup.expects_spread(shard_count, cell), label)
 
-        processed = client[handle.database_name][
-            handle.collection_name + "_processed"]
-        evolving = FIELDS["evolved"]
-        old_value = pick_most_frequent_value(processed, evolving)
-        originals = sharding_metrics.matched_by_shard(
-            client, namespace, {evolving: old_value})
-
         collection = open_collection(handle, uri)
-        started = time.time()
-        collection.execute_operation(
-            "translation", OPERATION_DATE,
-            {"fieldName": evolving, "oldValue": old_value,
-             "newValue": f"{old_value}__evolved"})
-        apply_s = time.time() - started
+        if real:
+            originals = sharding_metrics.matched_by_shard(
+                client, namespace, touched_filter(handle.deferred_values, evolving))
+            started = time.time()
+            corpus_module.apply_deferred_operations(collection, handle)
+            apply_s = time.time() - started
+        else:
+            processed = client[handle.database_name][
+                handle.collection_name + "_processed"]
+            old_value = pick_most_frequent_value(processed, evolving)
+            originals = sharding_metrics.matched_by_shard(
+                client, namespace, {evolving: old_value})
+            started = time.time()
+            collection.execute_operation(
+                "translation", OPERATION_DATE,
+                {"fieldName": evolving, "oldValue": old_value,
+                 "newValue": f"{old_value}__evolved"})
+            apply_s = time.time() - started
 
         after = sharding_metrics.distribution(client, namespace)
         row = shard_runner.shard_row(
@@ -246,10 +276,10 @@ def main(argv=None):
     mongo_version = topology.server_version(uri)
     out_path = results.result_path(args.out, EXPERIMENT, args.profile)
     done = shard_runner.already_done(args, EXPERIMENT, KEY_COLUMNS)
-    anchor = cells(args.deployment, anchor_only=True)
+    anchor = cells(args.deployment, anchor_only=True, corpus=args.corpus)
     written = skipped = failed = 0
 
-    for cell in cells(args.deployment):
+    for cell in cells(args.deployment, corpus=args.corpus):
         for repetition in range(profile["reps"]):
             key = resume.cell_key({
                 "experiment": EXPERIMENT, "deployment": args.deployment,

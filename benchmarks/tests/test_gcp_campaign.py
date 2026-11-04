@@ -35,3 +35,25 @@ def test_never_exceeds_the_ip_budget():
 
 def test_the_largest_cluster_runs_alone_once_everything_else_is_done():
     assert campaign.fitting(["sh7"], []) == ["sh7"]
+
+
+def test_the_full_plan_is_the_default():
+    assert campaign.select_plan(None, None) == campaign.PLAN
+
+
+def test_a_campaign_can_run_a_subset_of_clusters_and_experiments():
+    plan = campaign.select_plan(["sh4", "sh1"], ["s3", "s1"])
+    # plan order is kept, whatever order the flags were given in
+    assert plan == {"sh1": ["s1", "s3"], "sh4": ["s1", "s3"]}
+
+
+def test_a_cluster_with_nothing_left_to_run_is_dropped():
+    assert campaign.select_plan(["sh4", "rs3"], ["s1"]) == {"sh4": ["s1"]}
+
+
+def test_an_unknown_cluster_or_experiment_is_refused():
+    import pytest
+    with pytest.raises(ValueError):
+        campaign.select_plan(["sh9"], None)
+    with pytest.raises(ValueError):
+        campaign.select_plan(None, ["s9"])

@@ -168,3 +168,79 @@ def test_the_operation_is_dated_after_every_synthetic_record():
 
     latest_record = datetime.fromordinal(365 * 2100)   # DatabaseGenerator.generate_record
     assert OPERATION_DATE > latest_record
+
+
+def test_the_real_corpus_maps_the_roles_onto_datasus_fields():
+    """`UF` is the field no operation touches; `cid` is the one the CID-9 -> CID-10
+    transition rewrites."""
+    from benchmarks.experiments.s1_operation_cost import fields_for
+
+    assert fields_for("synthetic") == FIELDS
+    for corpus in ("real", "real_indexed", "real_transition"):
+        assert fields_for(corpus) == {"id": "_id", "data": "UF", "evolved": "cid"}
+
+
+def test_the_real_corpus_runs_the_six_keys_and_nothing_else():
+    """Skew and cardinality are knobs of the synthetic generator. The real corpus
+    has whatever the data has, so there is no one-factor-at-a-time extension to run,
+    not even on the anchor deployment."""
+    real = cells("sh4", corpus="real_transition")
+    assert len(real) == 6
+    assert {(cell["role"], cell["kind"]) for cell in real} == {
+        (role, kind) for role in ("id", "data", "evolved")
+        for kind in ("hashed", "ranged")}
+    assert all(cell["skew"] is None and cell["cardinality"] is None for cell in real)
+    assert cells("sh4", anchor_only=True, corpus="real_transition") == real
+
+
+def test_the_transition_touches_every_value_its_operations_name():
+    """A forward evolution copies the CID-9 records of each source; a backward one
+    the CID-10 records of each target. Both are documents the operation wrote from."""
+    from benchmarks.experiments.s1_operation_cost import touched_filter
+
+    assert touched_filter({"b", "a"}, "cid") == {"cid": {"$in": ["a", "b"]}}
+
+
+def test_the_real_corpus_measures_the_deferred_transition(monkeypatch):
+    """The setup leaves the cid operations out, so applying them is what is timed."""
+    from benchmarks.experiments import s1_operation_cost as s1
+
+    requested = {}
+
+    def _capture(kind, **kwargs):
+        requested.update(kwargs, kind=kind)
+        raise RuntimeError("stop after the corpus request")
+
+    monkeypatch.setattr(s1.corpus_module, "build_corpus", _capture)
+    monkeypatch.setattr(s1.cell_setup, "prepare", lambda *a, **k: None)
+    monkeypatch.setattr(s1.topology, "write_uri", lambda name: "mongodb://x:27017")
+
+    cell = cells("sh4", corpus="real_transition")[0]
+    args = type("Args", (), {"corpus": "real_transition", "deployment": "sh4",
+                             "chunk_size_mb": 1, "profile": "smoke"})()
+    with pytest.raises(RuntimeError):
+        s1.measure_cell(None, args, {"records": 10, "real_max_files": 1}, cell, 0, "8.0.12")
+    assert requested["kind"] == "real_transition"
+    assert requested["defer_field"] == "cid"
+    assert requested["shard_key"] in ({"UF": "hashed"}, {"UF": 1}, {"_id": "hashed"},
+                                      {"_id": 1}, {"cid": "hashed"}, {"cid": 1})
+
+
+def test_the_synthetic_corpus_defers_nothing(monkeypatch):
+    from benchmarks.experiments import s1_operation_cost as s1
+
+    requested = {}
+
+    def _capture(kind, **kwargs):
+        requested.update(kwargs)
+        raise RuntimeError("stop after the corpus request")
+
+    monkeypatch.setattr(s1.corpus_module, "build_corpus", _capture)
+    monkeypatch.setattr(s1.cell_setup, "prepare", lambda *a, **k: None)
+    monkeypatch.setattr(s1.topology, "write_uri", lambda name: "mongodb://x:27017")
+    args = type("Args", (), {"corpus": "synthetic", "deployment": "sh4",
+                             "chunk_size_mb": 1, "profile": "smoke"})()
+    with pytest.raises(RuntimeError):
+        s1.measure_cell(None, args, {"records": 10, "real_max_files": 1},
+                        cells("sh4", anchor_only=True)[0], 0, "8.0.12")
+    assert requested.get("defer_field") is None

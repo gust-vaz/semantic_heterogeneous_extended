@@ -74,3 +74,49 @@ def test_the_namespace_follows_the_operation_mode():
     handle = _handle_with([{"evo0": "a"}])
     assert namespace_for(handle, "preprocess") == "d.c_processed"
     assert namespace_for(handle, "rewrite") == "d.c"
+
+
+REAL_EVOLVED = frozenset({"cid", "municipio"})
+REAL_QUERIES = [{"cid": "a"}, {"municipio": "m"}, {"UF": "SP"}]
+
+
+def test_on_datasus_the_cid_key_compares_cid_against_municipio():
+    """Both evolve, so the two arms differ in targeting and nothing else."""
+    sets = query_sets(_handle_with(REAL_QUERIES), "cid", REAL_EVOLVED)
+    assert sets == {"targeted": [{"cid": "a"}], "broadcast": [{"municipio": "m"}]}
+
+
+def test_on_datasus_the_uf_key_has_only_a_targeted_arm():
+    """No other DATASUS field is plain and worth querying - ano and RefDate have a
+    value per year - so UF's broadcast counterpart is the _id row, which runs the
+    same UF queries with no key to target."""
+    sets = query_sets(_handle_with(REAL_QUERIES), "UF", REAL_EVOLVED)
+    assert arms(sets) == ["targeted"]
+    assert query_sets(_handle_with(REAL_QUERIES), "_id", REAL_EVOLVED)["broadcast"] == [
+        {"UF": "SP"}]
+
+
+def test_s3_shards_the_real_corpus_on_datasus_fields(monkeypatch, tmp_path):
+    from benchmarks.experiments import s3_targeting as s3
+
+    requested = []
+
+    def _capture(kind, **kwargs):
+        requested.append(kwargs["shard_key"])
+        raise KeyboardInterrupt
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+    monkeypatch.setattr(s3, "MongoClient", _Client)
+    monkeypatch.setattr(s3.topology, "server_version", lambda uri: "8.0.12")
+    monkeypatch.setattr(s3.topology, "shard_count", lambda name: 4)
+    monkeypatch.setattr(s3.cell_setup, "prepare", lambda *a, **k: None)
+    monkeypatch.setattr(s3.corpus_module, "build_corpus", _capture)
+    for role, field in [("evolved", "cid"), ("data", "UF")]:
+        monkeypatch.setattr(s3, "cells", lambda deployment: [(role, "hashed", "preprocess")])
+        with pytest.raises(KeyboardInterrupt):
+            s3.main(["--deployment", "sh4", "--profile", "smoke",
+                     "--corpus", "real_transition", "--out", str(tmp_path)])
+        assert requested.pop() == {field: "hashed"}

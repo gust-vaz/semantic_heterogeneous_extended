@@ -158,3 +158,119 @@ def test_plain_real_builds_no_cid_index(primary_uri, cleanup_corpus):
     handle = cleanup_corpus(primary_uri, build_corpus(
         "real", primary_uri=primary_uri, operation_mode="preprocess", max_files=1))
     assert ["cid"] not in _indexed_fields(primary_uri, handle, "_processed")
+
+
+def _windowed_dataset(root, operations=""):
+    """A file for each year bounding the window and one just outside each bound."""
+    from benchmarks.harness.corpus import TRANSITION_YEARS
+    first, last = TRANSITION_YEARS
+    source = root / "source_data"
+    source.mkdir()
+    for year in [first - 1, first, last, last + 1]:
+        revision = 9 if year < 1996 else 10
+        rows = ["UF,municipio,ano,RefDate,cid,ocorrencias"]
+        rows += [f"{uf},CIDADE {i},{year},{year}-12-31,{revision} CAUSA {i},1.0"
+                 for i, uf in enumerate(["SP", "RJ", "MG"] * 4)]
+        (source / f"mortalidade_{revision}_processed_{year}.csv").write_text(
+            "\n".join(rows) + "\n")
+    ops = root / "semantic_operations"
+    ops.mkdir()
+    (ops / "operations_cid9_cid10.csv").write_text(
+        "from;to;type;valid_from;field\n" + operations)
+    return str(root)
+
+
+def test_the_window_straddles_the_cid_change_and_holds_about_a_third_of_the_corpus():
+    from benchmarks.harness.corpus import TRANSITION_YEARS
+    assert TRANSITION_YEARS == (1988, 2003)
+
+
+def test_the_transition_files_are_the_years_inside_the_window(tmp_path):
+    from benchmarks.harness.corpus import transition_files
+    root = _windowed_dataset(tmp_path)
+    assert transition_files(f"{root}/source_data") == [
+        "mortalidade_10_processed_2003.csv", "mortalidade_9_processed_1988.csv"]
+
+
+def test_the_transition_corpus_loads_only_those_years(tmp_path, primary_uri, cleanup_corpus):
+    root = _windowed_dataset(tmp_path)
+    handle = cleanup_corpus(primary_uri, build_corpus(
+        "real_transition", primary_uri=primary_uri, operation_mode="preprocess",
+        dataset_root=root, max_files=1, records=10))
+    raw = MongoClient(primary_uri)[handle.database_name][handle.collection_name]
+    assert handle.record_count == 24
+    assert sorted(raw.distinct("ano")) == [1988, 2003]
+    assert ["cid"] in _indexed_fields(primary_uri, handle, "_processed")
+
+
+def test_the_transition_corpus_queries_every_field_a_shard_key_can_name(
+        tmp_path, primary_uri, cleanup_corpus):
+    """S3 needs queries on the evolving fields (cid, municipio) and on the plain one
+    (UF): a query set of cid alone leaves the UF key without a targeted arm."""
+    root = _windowed_dataset(tmp_path)
+    handle = cleanup_corpus(primary_uri, build_corpus(
+        "real_transition", primary_uri=primary_uri, operation_mode="preprocess",
+        dataset_root=root))
+    assert {field for query in handle.query_set for field in query} == {
+        "cid", "municipio", "UF"}
+    assert all(len(query) == 1 for query in handle.query_set)
+
+
+def test_the_plain_real_corpus_still_queries_cid_alone(tmp_path, primary_uri, cleanup_corpus):
+    root = _mini_dataset(tmp_path)
+    handle = cleanup_corpus(primary_uri, build_real(
+        primary_uri, operation_mode="preprocess", dataset_root=root))
+    assert {field for query in handle.query_set for field in query} == {"cid"}
+
+
+TRANSITION_OPERATIONS = (
+    "9 CAUSA 0;10 CAUSA 0;translation;1996-01-01;cid\n"
+    "9 CAUSA 1;10 CAUSA 1;grouping;1996-01-01;cid\n"
+    "9 CAUSA 2;10 CAUSA 1;grouping;1996-01-01;cid\n"
+    "CIDADE 3;CIDADE NOVA;translation;1990-01-01;municipio\n")
+
+
+def _operation_fields(uri, handle):
+    versions = MongoClient(uri)[handle.database_name][handle.collection_name + "_versions"]
+    return sorted(document["next_operation"]["field"]
+                  for document in versions.find({"next_operation": {"$ne": None}}))
+
+
+def test_deferring_a_field_leaves_its_operations_out_of_the_setup(
+        tmp_path, primary_uri, cleanup_corpus):
+    root = _windowed_dataset(tmp_path, TRANSITION_OPERATIONS)
+    handle = cleanup_corpus(primary_uri, build_corpus(
+        "real_transition", primary_uri=primary_uri, operation_mode="preprocess",
+        dataset_root=root, defer_field="cid"))
+    assert _operation_fields(primary_uri, handle) == ["municipio"]
+    assert len(handle.deferred_operations) == 3
+    assert handle.deferred_values == {"9 CAUSA 0", "9 CAUSA 1", "9 CAUSA 2",
+                                      "10 CAUSA 0", "10 CAUSA 1"}
+
+
+def test_applying_the_deferred_operations_gives_the_corpus_a_full_setup_would(
+        tmp_path, primary_uri, cleanup_corpus):
+    from semantic_heterogeneous_database import BasicCollection
+    from benchmarks.harness.corpus import apply_deferred_operations
+
+    root = _windowed_dataset(tmp_path, TRANSITION_OPERATIONS)
+    deferred = cleanup_corpus(primary_uri, build_corpus(
+        "real_transition", primary_uri=primary_uri, operation_mode="preprocess",
+        dataset_root=root, defer_field="cid"))
+    whole = cleanup_corpus(primary_uri, build_corpus(
+        "real_transition", primary_uri=primary_uri, operation_mode="preprocess",
+        dataset_root=root))
+    late = BasicCollection(deferred.database_name, deferred.collection_name,
+                           primary_uri, "preprocess")
+    apply_deferred_operations(late, deferred)
+    early = BasicCollection(whole.database_name, whole.collection_name,
+                            primary_uri, "preprocess")
+
+    def answer(collection, query):
+        return sorted((doc["municipio"], doc["ano"], doc["cid"])
+                      for doc in collection.find_many(query))
+
+    for query in [{"cid": "10 CAUSA 1"}, {"cid": "9 CAUSA 0"}, {"cid": "10 CAUSA 0"}]:
+        assert answer(late, query) == answer(early, query), query
+    # the CID-9 grouping sources from 1988, plus the CID-10 value itself from 2003
+    assert len(answer(late, {"cid": "10 CAUSA 1"})) == 3
